@@ -111,7 +111,10 @@ export async function POST(req: Request) {
       );
     }
     
-    const { variants, images, ...productData } = parsed.data;
+    const { variants, images, product_images, ...productData } = parsed.data;
+    
+    // Normalizar: usar product_images si images está vacío
+    const normalizedImages = (images && images.length > 0) ? images : (product_images || []);
     
     // Convertir price a string si es number y mapear campos a nombres de BD
     const productToInsert: any = {
@@ -180,18 +183,26 @@ export async function POST(req: Request) {
     }
     
     // Insertar imágenes si existen
-    if (images && images.length > 0) {
-      console.log("Insertando imágenes:", images);
-      const imagesToInsert = images.map((image) => ({
-        product_id: product.id,
-        image_url: image.imageUrl,
-      }));
+    if (normalizedImages && normalizedImages.length > 0) {
+      console.log("Insertando imágenes:", normalizedImages);
+      const imagesToInsert = normalizedImages.map((image) => {
+        // Aceptar tanto imageUrl como image_url para compatibilidad
+        const imageUrl = image.imageUrl || (image as any).image_url;
+        if (!imageUrl) {
+          throw new Error("Cada imagen debe tener 'imageUrl' o 'image_url'");
+        }
+        return {
+          product_id: product.id,
+          image_url: imageUrl,
+        };
+      });
       
       console.log("Imágenes a insertar:", JSON.stringify(imagesToInsert, null, 2));
       
-      const { error: imagesError } = await supabase
+      const { error: imagesError, data: insertedImages } = await supabase
         .from("product_images")
-        .insert(imagesToInsert);
+        .insert(imagesToInsert)
+        .select();
       
       if (imagesError) {
         console.error("Error al insertar imágenes:", imagesError);
@@ -207,6 +218,8 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
+      
+      console.log("Imágenes insertadas correctamente:", insertedImages?.length || 0);
     }
     
     // Obtener el producto completo con relaciones

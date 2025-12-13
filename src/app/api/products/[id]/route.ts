@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import { updateProductSchema } from "@/validations/product";
+import { productUpdateSchema } from "@/validations/product";
 import { z } from "zod";
 
 // Validar UUID
@@ -78,7 +78,7 @@ export async function PUT(
     }
     
     const body = await req.json();
-    const parsed = updateProductSchema.safeParse(body);
+    const parsed = productUpdateSchema.safeParse(body);
     
     if (!parsed.success) {
       return Response.json(
@@ -98,7 +98,10 @@ export async function PUT(
       return Response.json({ error: "Producto no encontrado" }, { status: 404 });
     }
     
-    const { variants, images, ...productData } = parsed.data;
+    const { variants, images, product_images, ...productData } = parsed.data;
+    
+    // Normalizar: usar product_images si images está vacío o no está definido
+    const normalizedImages = (images !== undefined) ? images : product_images;
     
     // Preparar datos del producto para actualizar (mapear a nombres de BD)
     const productUpdate: any = {};
@@ -160,7 +163,7 @@ export async function PUT(
     }
     
     // Actualizar imágenes si se proporcionan
-    if (images !== undefined) {
+    if (normalizedImages !== undefined) {
       // Eliminar imágenes existentes
       const { error: deleteImagesError } = await supabase
         .from("product_images")
@@ -168,23 +171,52 @@ export async function PUT(
         .eq("product_id", params.id);
       
       if (deleteImagesError) {
-        return Response.json({ error: deleteImagesError.message }, { status: 500 });
+        console.error("Error al eliminar imágenes existentes:", deleteImagesError);
+        return Response.json(
+          { 
+            error: "Error al eliminar imágenes existentes",
+            details: deleteImagesError.message,
+            code: deleteImagesError.code
+          },
+          { status: 500 }
+        );
       }
       
       // Insertar nuevas imágenes si hay alguna
-      if (images.length > 0) {
-        const imagesToInsert = images.map((image) => ({
-          product_id: params.id,
-          image_url: image.imageUrl,
-        }));
+      if (normalizedImages.length > 0) {
+        const imagesToInsert = normalizedImages.map((image) => {
+          // Aceptar tanto imageUrl como image_url para compatibilidad
+          const imageUrl = image.imageUrl || (image as any).image_url;
+          if (!imageUrl) {
+            throw new Error("Cada imagen debe tener 'imageUrl' o 'image_url'");
+          }
+          return {
+            product_id: params.id,
+            image_url: imageUrl,
+          };
+        });
         
-        const { error: insertImagesError } = await supabase
+        console.log("Insertando imágenes actualizadas:", imagesToInsert);
+        
+        const { error: insertImagesError, data: insertedImages } = await supabase
           .from("product_images")
-          .insert(imagesToInsert);
+          .insert(imagesToInsert)
+          .select();
         
         if (insertImagesError) {
-          return Response.json({ error: insertImagesError.message }, { status: 500 });
+          console.error("Error al insertar imágenes:", insertImagesError);
+          return Response.json(
+            { 
+              error: "Error al insertar imágenes",
+              details: insertImagesError.message,
+              code: insertImagesError.code,
+              hint: insertImagesError.hint
+            },
+            { status: 500 }
+          );
         }
+        
+        console.log("Imágenes actualizadas correctamente:", insertedImages?.length || 0);
       }
     }
     

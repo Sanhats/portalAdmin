@@ -27,14 +27,20 @@ Backend para sistema de ecommerce construido con Next.js, Supabase y Drizzle ORM
 
 ## 📚 Documentación
 
+### Para Frontend
+- **⭐ `DOCUMENTACION_FRONTEND.md`** - **Documentación completa para el equipo frontend** (NUEVO)
+- **⭐ `QUICK_START_FRONTEND.md`** - **Inicio rápido en 5 minutos para frontend** (NUEVO)
+- **⭐ `API_REFERENCE.md`** - **Referencia completa de la API con ejemplos**
+- **⭐ `openapi.json`** - **Especificación OpenAPI 3.0**
+
+### Para Backend
 - **⭐ `ESTADO_PROYECTO.md`** - **Estado actual del proyecto y próximos pasos** (LEER PRIMERO)
 - **⭐ `ENDPOINTS_PRODUCTOS.md`** - **Documentación completa de endpoints CRUD de productos**
 - **⭐ `SISTEMA_UPLOAD.md`** - **Sistema de upload de imágenes - Guía completa**
 - **⭐ `CONFIGURAR_SUPABASE_STORAGE.md`** - **Configurar bucket y políticas de Storage**
-- **⭐ `SISTEMA_AUTENTICACION.md`** - **Sistema de autenticación admin - Documentación completa**
 - **⭐ `CONFIGURAR_AUTENTICACION.md`** - **Configurar Supabase Auth y políticas RLS**
 - **⭐ `POLITICAS_RLS.sql`** - **Script SQL con todas las políticas RLS**
-- **⭐ `RESUMEN_FINAL_PROYECTO.md`** - **Resumen completo de todo el proyecto** (NUEVO)
+- **⭐ `RESUMEN_FINAL_PROYECTO.md`** - **Resumen completo de todo el proyecto**
 - `DOCUMENTACION_TECNICA.md` - Documentación técnica completa del proyecto
 - `GUIA_VARIABLES_ENTORNO.md` - Guía paso a paso para obtener las variables de entorno de Supabase
 - `SOLUCION_CONEXION.md` - Solución para errores de conexión (ENOTFOUND, etc.)

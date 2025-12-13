@@ -28,9 +28,6 @@ export const productSchema = z.object({
     .nullable(),
 });
 
-// Esquema para actualización parcial
-export const productUpdateSchema = productSchema.partial();
-
 // Esquema para variante
 export const variantSchema = z.object({
   name: z.string()
@@ -41,22 +38,32 @@ export const variantSchema = z.object({
     .max(100, "El valor de la variante no puede exceder 100 caracteres"),
 });
 
-// Esquema para imagen
+// Esquema para imagen - acepta tanto imageUrl como image_url para compatibilidad
 export const productImageSchema = z.object({
   imageUrl: z.string()
     .url("La URL de la imagen debe ser válida")
-    .max(2048, "La URL no puede exceder 2048 caracteres"),
+    .max(2048, "La URL no puede exceder 2048 caracteres")
+    .optional(),
+  image_url: z.string()
+    .url("La URL de la imagen debe ser válida")
+    .max(2048, "La URL no puede exceder 2048 caracteres")
+    .optional(),
+}).refine((data) => data.imageUrl || data.image_url, {
+  message: "Debe proporcionar 'imageUrl' o 'image_url'",
 });
 
 // Esquema completo para crear producto con variantes e imágenes
+// Acepta tanto 'images' como 'product_images' para compatibilidad
 export const createProductSchema = productSchema.extend({
   variants: z.array(variantSchema).optional().default([]),
   images: z.array(productImageSchema).optional().default([]),
+  product_images: z.array(productImageSchema).optional().default([]),
 });
 
 // Esquema para actualizar producto con variantes e imágenes
-export const updateProductSchema = productSchema.partial().extend({
+// Acepta tanto 'images' como 'product_images' para compatibilidad
+export const productUpdateSchema = productSchema.partial().extend({
   variants: z.array(variantSchema).optional(),
   images: z.array(productImageSchema).optional(),
+  product_images: z.array(productImageSchema).optional(),
 });
-
