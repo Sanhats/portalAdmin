@@ -98,13 +98,23 @@ async function login(email: string, password: string) {
 **Query Parameters:**
 - `page` (opcional): Número de página (default: 1)
 - `limit` (opcional): Productos por página (default: 10)
-- `categoryId` (opcional): Filtrar por categoría (UUID)
+- `categoryId` (opcional): Filtrar por categoría usando UUID
+- `categorySlug` (opcional): Filtrar por categoría usando slug (más amigable para URLs)
 - `isFeatured` (opcional): `true` para productos destacados
 - `search` (opcional): Buscar en nombre y descripción
 
-**Ejemplo:**
+**Nota:** Puedes usar `categoryId` o `categorySlug`, pero no ambos. Si usas `categorySlug`, el backend buscará automáticamente el UUID correspondiente.
+
+**Ejemplos:**
 ```
-GET /api/products?page=1&limit=10&isFeatured=true&search=laptop
+# Filtrar por UUID de categoría
+GET /api/products?categoryId=uuid-de-categoria
+
+# Filtrar por slug de categoría (recomendado para URLs amigables)
+GET /api/products?categorySlug=electronicos
+
+# Combinar filtros
+GET /api/products?page=1&limit=10&categorySlug=electronicos&isFeatured=true&search=laptop
 ```
 
 **Response 200:**
@@ -192,6 +202,7 @@ async function getProducts(params?: {
   page?: number;
   limit?: number;
   categoryId?: string;
+  categorySlug?: string;
   isFeatured?: boolean;
   search?: string;
 }): Promise<ProductsResponse> {
@@ -200,6 +211,7 @@ async function getProducts(params?: {
   if (params?.page) queryParams.append('page', params.page.toString());
   if (params?.limit) queryParams.append('limit', params.limit.toString());
   if (params?.categoryId) queryParams.append('categoryId', params.categoryId);
+  if (params?.categorySlug) queryParams.append('categorySlug', params.categorySlug);
   if (params?.isFeatured) queryParams.append('isFeatured', 'true');
   if (params?.search) queryParams.append('search', params.search);
 
@@ -753,6 +765,7 @@ class ApiClient {
     page?: number;
     limit?: number;
     categoryId?: string;
+    categorySlug?: string;
     isFeatured?: boolean;
     search?: string;
   }) {

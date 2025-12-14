@@ -220,9 +220,12 @@ Listar productos con filtros, paginación e includes.
 **Query Parameters:**
 - `page` (opcional): Número de página (default: 1)
 - `limit` (opcional): Productos por página (default: 10)
-- `categoryId` (opcional): Filtrar por categoría (UUID)
+- `categoryId` (opcional): Filtrar por categoría usando UUID
+- `categorySlug` (opcional): Filtrar por categoría usando slug (más amigable para URLs)
 - `isFeatured` (opcional): Filtrar productos destacados (`true`/`false`)
 - `search` (opcional): Buscar en nombre y descripción
+
+**Nota:** Puedes usar `categoryId` o `categorySlug`, pero no ambos. Si usas `categorySlug`, el backend buscará automáticamente el UUID correspondiente.
 
 **Response 200 OK:**
 ```json
@@ -272,8 +275,14 @@ Listar productos con filtros, paginación e includes.
 # Obtener primera página
 $products = Invoke-RestMethod -Uri "http://localhost:3000/api/products?page=1&limit=10"
 
-# Filtrar por categoría
+# Filtrar por categoría (UUID)
 $products = Invoke-RestMethod -Uri "http://localhost:3000/api/products?categoryId=uuid-categoria"
+
+# Filtrar por categoría (slug - recomendado para URLs amigables)
+$products = Invoke-RestMethod -Uri "http://localhost:3000/api/products?categorySlug=electronicos"
+
+# Combinar filtros
+$products = Invoke-RestMethod -Uri "http://localhost:3000/api/products?categorySlug=electronicos&isFeatured=true&page=1"
 
 # Buscar productos
 $products = Invoke-RestMethod -Uri "http://localhost:3000/api/products?search=laptop"

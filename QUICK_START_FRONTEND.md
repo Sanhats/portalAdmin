@@ -167,6 +167,7 @@ class ApiClient {
     page?: number;
     limit?: number;
     categoryId?: string;
+    categorySlug?: string;
     isFeatured?: boolean;
     search?: string;
   }) {
@@ -236,7 +237,36 @@ const api = new ApiClient('https://tu-proyecto.vercel.app/api');
 await api.login('admin@example.com', 'password123');
 
 // Obtener productos
+// Obtener productos con paginación
 const products = await api.getProducts({ page: 1, limit: 10 });
+
+// Filtrar productos por categoría (usando UUID)
+const productsByCategory = await api.getProducts({ 
+  categoryId: 'uuid-de-categoria',
+  page: 1,
+  limit: 10 
+});
+
+// Filtrar productos por categoría (usando slug - recomendado)
+const productsBySlug = await api.getProducts({ 
+  categorySlug: 'electronicos',
+  page: 1,
+  limit: 10 
+});
+
+// Filtrar productos destacados
+const featuredProducts = await api.getProducts({ 
+  isFeatured: true,
+  page: 1,
+  limit: 10 
+});
+
+// Buscar productos
+const searchResults = await api.getProducts({ 
+  search: 'laptop',
+  page: 1,
+  limit: 10 
+});
 
 // Crear producto
 const newProduct = await api.createProduct({
@@ -267,5 +297,6 @@ Para más detalles, ejemplos y tipos TypeScript completos, ver:
 ---
 
 **¡Listo para comenzar! 🚀**
+
 
 

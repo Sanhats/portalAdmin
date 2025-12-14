@@ -628,11 +628,20 @@
           {
             "name": "categoryId",
             "in": "query",
-            "description": "Filtrar por categoría (UUID)",
+            "description": "Filtrar por categoría usando UUID",
             "required": false,
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "categorySlug",
+            "in": "query",
+            "description": "Filtrar por categoría usando slug (más amigable para URLs). Si se proporciona, el backend buscará automáticamente el UUID correspondiente.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {

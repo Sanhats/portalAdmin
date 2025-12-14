@@ -14,8 +14,34 @@ export async function GET(req: Request) {
     
     // Filtros
     const categoryId = searchParams.get("categoryId");
+    const categorySlug = searchParams.get("categorySlug");
     const isFeatured = searchParams.get("isFeatured");
     const search = searchParams.get("search");
+    
+    // Si se proporciona categorySlug, obtener el categoryId primero
+    let finalCategoryId = categoryId;
+    if (categorySlug && !categoryId) {
+      const { data: category } = await supabase
+        .from("categories")
+        .select("id")
+        .eq("slug", categorySlug)
+        .single();
+      
+      if (category) {
+        finalCategoryId = category.id;
+      } else {
+        // Si no se encuentra la categoría por slug, retornar array vacío
+        return Response.json({
+          data: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        });
+      }
+    }
     
     // Construir query base
     let query = supabase
@@ -41,8 +67,8 @@ export async function GET(req: Request) {
       .range(offset, offset + limit - 1);
     
     // Aplicar filtros
-    if (categoryId) {
-      query = query.eq("category_id", categoryId);
+    if (finalCategoryId) {
+      query = query.eq("category_id", finalCategoryId);
     }
     
     if (isFeatured === "true") {
@@ -62,8 +88,8 @@ export async function GET(req: Request) {
     // Obtener total para paginación
     let countQuery = supabase.from("products").select("*", { count: "exact", head: true });
     
-    if (categoryId) {
-      countQuery = countQuery.eq("category_id", categoryId);
+    if (finalCategoryId) {
+      countQuery = countQuery.eq("category_id", finalCategoryId);
     }
     
     if (isFeatured === "true") {
