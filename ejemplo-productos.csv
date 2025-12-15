@@ -1,0 +1,7 @@
+sku,nameInternal,price,stock,description,isActive,isVisible
+PROD-001,Producto de Prueba 1,15000,50,Descripción del producto 1,true,false
+PROD-002,Producto de Prueba 2,20000,30,Descripción del producto 2,true,true
+PROD-003,Producto de Prueba 3,12000,25,Descripción del producto 3,true,false
+PROD-004,Producto de Prueba 4,18000,40,,true,false
+PROD-005,Producto de Prueba 5,25000,15,Descripción del producto 5,true,true
+

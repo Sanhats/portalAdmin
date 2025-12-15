@@ -62,7 +62,16 @@ export const createProductSchema = productSchema.extend({
 
 // Esquema para actualizar producto con variantes e imágenes
 // Acepta tanto 'images' como 'product_images' para compatibilidad
+// SPRINT 5: Incluye campos del SPRINT 1/2 para actualización
 export const productUpdateSchema = productSchema.partial().extend({
+  // Campos del SPRINT 1/2
+  nameInternal: z.string()
+    .min(1, "El nombre interno es requerido")
+    .max(255, "El nombre interno no puede exceder 255 caracteres")
+    .optional(),
+  isActive: z.boolean().optional(),
+  isVisible: z.boolean().optional(),
+  // Variantes e imágenes
   variants: z.array(variantSchema).optional(),
   images: z.array(productImageSchema).optional(),
   product_images: z.array(productImageSchema).optional(),
