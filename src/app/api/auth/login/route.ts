@@ -1,5 +1,6 @@
 import { supabaseAuth } from "@/lib/auth";
 import { loginSchema } from "@/validations/auth";
+import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 
 // POST /api/auth/login - Iniciar sesión
 export async function POST(req: Request) {
@@ -8,10 +9,8 @@ export async function POST(req: Request) {
     const parsed = loginSchema.safeParse(body);
 
     if (!parsed.success) {
-      return Response.json(
-        { error: "Datos inválidos", details: parsed.error.errors },
-        { status: 400 }
-      );
+      console.error("[POST /api/auth/login] Error de validación:", parsed.error.errors);
+      return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
 
     const { email, password } = parsed.data;
@@ -23,21 +22,18 @@ export async function POST(req: Request) {
     });
 
     if (error) {
-      return Response.json(
-        { error: "Credenciales inválidas", details: error.message },
-        { status: 401 }
-      );
+      console.error("[POST /api/auth/login] Error de autenticación:", error.message);
+      return errorResponse("Credenciales inválidas", 401, error.message);
     }
 
     if (!data.session || !data.user) {
-      return Response.json(
-        { error: "Error al iniciar sesión" },
-        { status: 500 }
-      );
+      console.error("[POST /api/auth/login] Sesión o usuario no retornado");
+      return errorResponse("Error al iniciar sesión", 500);
     }
 
+    console.log("[POST /api/auth/login] Login exitoso para:", email);
     // Retornar información de la sesión
-    return Response.json({
+    return jsonResponse({
       success: true,
       user: {
         id: data.user.id,
@@ -52,14 +48,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (error) {
-    console.error("Error en POST /api/auth/login:", error);
-    return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Error desconocido",
-        type: "unexpected_error",
-      },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "POST /api/auth/login");
   }
 }
 

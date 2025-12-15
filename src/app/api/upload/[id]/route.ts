@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 
 const BUCKET_NAME = "product-images";
 
@@ -12,10 +13,7 @@ export async function DELETE(
     const filePath = params.id;
 
     if (!filePath) {
-      return Response.json(
-        { error: "ID del archivo no proporcionado" },
-        { status: 400 }
-      );
+      return errorResponse("ID del archivo no proporcionado", 400);
     }
 
     // Verificar que el archivo existe
@@ -26,10 +24,8 @@ export async function DELETE(
       });
 
     if (checkError) {
-      return Response.json(
-        { error: "Error al verificar el archivo", details: checkError.message },
-        { status: 500 }
-      );
+      console.error("[DELETE /api/upload/[id]] Error al verificar archivo:", checkError);
+      return errorResponse("Error al verificar el archivo", 500, checkError.message);
     }
 
     // Eliminar el archivo
@@ -38,30 +34,21 @@ export async function DELETE(
       .remove([filePath]);
 
     if (deleteError) {
-      console.error("Error al eliminar archivo:", deleteError);
-      return Response.json(
-        { error: "Error al eliminar el archivo", details: deleteError.message },
-        { status: 500 }
-      );
+      console.error("[DELETE /api/upload/[id]] Error al eliminar archivo:", deleteError);
+      return errorResponse("Error al eliminar el archivo", 500, deleteError.message);
     }
 
-    return Response.json(
+    console.log("[DELETE /api/upload/[id]] Archivo eliminado exitosamente:", filePath);
+    return jsonResponse(
       {
         success: true,
         message: "Archivo eliminado correctamente",
         filePath: filePath,
       },
-      { status: 200 }
+      200
     );
   } catch (error) {
-    console.error("Error en DELETE /api/upload/[id]:", error);
-    return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Error desconocido",
-        type: "unexpected_error",
-      },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "DELETE /api/upload/[id]");
   }
 }
 

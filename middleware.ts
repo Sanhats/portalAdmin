@@ -76,7 +76,14 @@ export async function middleware(request: NextRequest) {
     if (!token) {
       return NextResponse.json(
         { error: "No autorizado. Token Bearer requerido." },
-        { status: 401 }
+        { 
+          status: 401,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          }
+        }
       );
     }
 
@@ -86,7 +93,14 @@ export async function middleware(request: NextRequest) {
     if (!user) {
       return NextResponse.json(
         { error: "No autorizado. Token inválido o expirado." },
-        { status: 401 }
+        { 
+          status: 401,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          }
+        }
       );
     }
 

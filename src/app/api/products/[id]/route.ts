@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { productUpdateSchema } from "@/validations/product";
 import { z } from "zod";
+import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 
 // Validar UUID
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -44,21 +45,19 @@ export async function GET(
     
     if (error) {
       if (error.code === "PGRST116") {
-        return Response.json({ error: "Producto no encontrado" }, { status: 404 });
+        return errorResponse("Producto no encontrado", 404);
       }
-      return Response.json({ error: error.message }, { status: 500 });
+      console.error("[GET /api/products/[id]] Error de Supabase:", error);
+      return errorResponse("Error al obtener el producto", 500, error.message, error.code);
     }
     
     if (!data) {
-      return Response.json({ error: "Producto no encontrado" }, { status: 404 });
+      return errorResponse("Producto no encontrado", 404);
     }
     
-    return Response.json(data);
+    return jsonResponse(data);
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "Error desconocido" },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "GET /api/products/[id]");
   }
 }
 
@@ -71,20 +70,15 @@ export async function PUT(
     // Validar UUID
     const uuidValidation = uuidSchema.safeParse(params.id);
     if (!uuidValidation.success) {
-      return Response.json(
-        { error: "ID inválido", details: uuidValidation.error.errors },
-        { status: 400 }
-      );
+      return errorResponse("ID inválido", 400, uuidValidation.error.errors);
     }
     
     const body = await req.json();
     const parsed = productUpdateSchema.safeParse(body);
     
     if (!parsed.success) {
-      return Response.json(
-        { error: "Datos inválidos", details: parsed.error.errors },
-        { status: 400 }
-      );
+      console.error("[PUT /api/products/[id]] Error de validación:", parsed.error.errors);
+      return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
     
     // Verificar que el producto existe
@@ -95,7 +89,7 @@ export async function PUT(
       .single();
     
     if (checkError || !existingProduct) {
-      return Response.json({ error: "Producto no encontrado" }, { status: 404 });
+      return errorResponse("Producto no encontrado", 404);
     }
     
     const { variants, images, product_images, ...productData } = parsed.data;
@@ -128,7 +122,8 @@ export async function PUT(
         .eq("id", params.id);
       
       if (updateError) {
-        return Response.json({ error: updateError.message }, { status: 500 });
+        console.error("[PUT /api/products/[id]] Error al actualizar producto:", updateError);
+        return errorResponse("Error al actualizar el producto", 500, updateError.message, updateError.code);
       }
     }
     
@@ -141,7 +136,8 @@ export async function PUT(
         .eq("product_id", params.id);
       
       if (deleteVariantsError) {
-        return Response.json({ error: deleteVariantsError.message }, { status: 500 });
+        console.error("[PUT /api/products/[id]] Error al eliminar variantes:", deleteVariantsError);
+        return errorResponse("Error al eliminar variantes", 500, deleteVariantsError.message, deleteVariantsError.code);
       }
       
       // Insertar nuevas variantes si hay alguna
@@ -157,7 +153,8 @@ export async function PUT(
           .insert(variantsToInsert);
         
         if (insertVariantsError) {
-          return Response.json({ error: insertVariantsError.message }, { status: 500 });
+          console.error("[PUT /api/products/[id]] Error al insertar variantes:", insertVariantsError);
+          return errorResponse("Error al insertar variantes", 500, insertVariantsError.message, insertVariantsError.code);
         }
       }
     }
@@ -171,14 +168,12 @@ export async function PUT(
         .eq("product_id", params.id);
       
       if (deleteImagesError) {
-        console.error("Error al eliminar imágenes existentes:", deleteImagesError);
-        return Response.json(
-          { 
-            error: "Error al eliminar imágenes existentes",
-            details: deleteImagesError.message,
-            code: deleteImagesError.code
-          },
-          { status: 500 }
+        console.error("[PUT /api/products/[id]] Error al eliminar imágenes existentes:", deleteImagesError);
+        return errorResponse(
+          "Error al eliminar imágenes existentes",
+          500,
+          deleteImagesError.message,
+          deleteImagesError.code
         );
       }
       
@@ -204,19 +199,17 @@ export async function PUT(
           .select();
         
         if (insertImagesError) {
-          console.error("Error al insertar imágenes:", insertImagesError);
-          return Response.json(
-            { 
-              error: "Error al insertar imágenes",
-              details: insertImagesError.message,
-              code: insertImagesError.code,
-              hint: insertImagesError.hint
-            },
-            { status: 500 }
+          console.error("[PUT /api/products/[id]] Error al insertar imágenes:", insertImagesError);
+          return errorResponse(
+            "Error al insertar imágenes",
+            500,
+            insertImagesError.message,
+            insertImagesError.code,
+            insertImagesError.hint
           );
         }
         
-        console.log("Imágenes actualizadas correctamente:", insertedImages?.length || 0);
+        console.log("[PUT /api/products/[id]] Imágenes actualizadas correctamente:", insertedImages?.length || 0);
       }
     }
     
@@ -244,15 +237,13 @@ export async function PUT(
       .single();
     
     if (fetchError) {
-      return Response.json({ error: fetchError.message }, { status: 500 });
+      console.error("[PUT /api/products/[id]] Error al obtener producto actualizado:", fetchError);
+      return errorResponse("Error al obtener el producto actualizado", 500, fetchError.message, fetchError.code);
     }
     
-    return Response.json(updatedProduct);
+    return jsonResponse(updatedProduct);
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "Error desconocido" },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "PUT /api/products/[id]");
   }
 }
 
@@ -265,10 +256,7 @@ export async function DELETE(
     // Validar UUID
     const uuidValidation = uuidSchema.safeParse(params.id);
     if (!uuidValidation.success) {
-      return Response.json(
-        { error: "ID inválido", details: uuidValidation.error.errors },
-        { status: 400 }
-      );
+      return errorResponse("ID inválido", 400, uuidValidation.error.errors);
     }
     
     // Verificar que el producto existe
@@ -279,7 +267,7 @@ export async function DELETE(
       .single();
     
     if (checkError || !existingProduct) {
-      return Response.json({ error: "Producto no encontrado" }, { status: 404 });
+      return errorResponse("Producto no encontrado", 404);
     }
     
     // Eliminar producto (las imágenes y variantes se eliminan en cascada)
@@ -289,18 +277,14 @@ export async function DELETE(
       .eq("id", params.id);
     
     if (deleteError) {
-      return Response.json({ error: deleteError.message }, { status: 500 });
+      console.error("[DELETE /api/products/[id]] Error al eliminar producto:", deleteError);
+      return errorResponse("Error al eliminar el producto", 500, deleteError.message, deleteError.code);
     }
     
-    return Response.json(
-      { message: "Producto eliminado correctamente" },
-      { status: 200 }
-    );
+    console.log("[DELETE /api/products/[id]] Producto eliminado exitosamente:", params.id);
+    return jsonResponse({ message: "Producto eliminado correctamente" }, 200);
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "Error desconocido" },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "DELETE /api/products/[id]");
   }
 }
 

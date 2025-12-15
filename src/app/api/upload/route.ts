@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { imageFileTypeSchema } from "@/validations/upload";
+import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 
 const BUCKET_NAME = "product-images";
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -9,10 +10,7 @@ export async function POST(req: Request) {
   try {
     // Verificar que las variables de entorno estén configuradas
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return Response.json(
-        { error: "Variables de entorno no configuradas" },
-        { status: 500 }
-      );
+      return errorResponse("Variables de entorno no configuradas", 500);
     }
 
     // Obtener el FormData
@@ -20,10 +18,7 @@ export async function POST(req: Request) {
     const file = formData.get("file") as File;
 
     if (!file) {
-      return Response.json(
-        { error: "No se proporcionó ningún archivo" },
-        { status: 400 }
-      );
+      return errorResponse("No se proporcionó ningún archivo", 400);
     }
 
     // Validar tipo de archivo
@@ -31,23 +26,19 @@ export async function POST(req: Request) {
     const typeValidation = imageFileTypeSchema.safeParse(fileType);
     
     if (!typeValidation.success) {
-      return Response.json(
-        { 
-          error: "Tipo de archivo no permitido",
-          details: "Solo se permiten imágenes: JPEG, PNG, WebP, GIF"
-        },
-        { status: 400 }
+      return errorResponse(
+        "Tipo de archivo no permitido",
+        400,
+        "Solo se permiten imágenes: JPEG, PNG, WebP, GIF"
       );
     }
 
     // Validar tamaño del archivo
     if (file.size > MAX_FILE_SIZE) {
-      return Response.json(
-        { 
-          error: "Archivo demasiado grande",
-          details: `El archivo no puede ser mayor a ${MAX_FILE_SIZE / 1024 / 1024}MB`
-        },
-        { status: 400 }
+      return errorResponse(
+        "Archivo demasiado grande",
+        400,
+        `El archivo no puede ser mayor a ${MAX_FILE_SIZE / 1024 / 1024}MB`
       );
     }
 
@@ -69,11 +60,8 @@ export async function POST(req: Request) {
       });
 
     if (uploadError) {
-      console.error("Error al subir archivo:", uploadError);
-      return Response.json(
-        { error: "Error al subir el archivo", details: uploadError.message },
-        { status: 500 }
-      );
+      console.error("[POST /api/upload] Error al subir archivo:", uploadError);
+      return errorResponse("Error al subir el archivo", 500, uploadError.message);
     }
 
     // Obtener URL pública del archivo
@@ -84,14 +72,12 @@ export async function POST(req: Request) {
     if (!urlData?.publicUrl) {
       // Si falla, intentar eliminar el archivo subido
       await supabase.storage.from(BUCKET_NAME).remove([filePath]);
-      return Response.json(
-        { error: "Error al obtener la URL pública del archivo" },
-        { status: 500 }
-      );
+      return errorResponse("Error al obtener la URL pública del archivo", 500);
     }
 
+    console.log("[POST /api/upload] Archivo subido exitosamente:", filePath);
     // Retornar información del archivo subido
-    return Response.json(
+    return jsonResponse(
       {
         success: true,
         file: {
@@ -103,17 +89,10 @@ export async function POST(req: Request) {
           type: file.type,
         },
       },
-      { status: 201 }
+      201
     );
   } catch (error) {
-    console.error("Error en POST /api/upload:", error);
-    return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Error desconocido",
-        type: "unexpected_error",
-      },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "POST /api/upload");
   }
 }
 
@@ -128,10 +107,8 @@ export async function GET() {
       });
 
     if (error) {
-      return Response.json(
-        { error: error.message },
-        { status: 500 }
-      );
+      console.error("[GET /api/upload] Error al listar archivos:", error);
+      return errorResponse("Error al listar archivos", 500, error.message);
     }
 
     // Obtener URLs públicas para cada archivo
@@ -146,17 +123,12 @@ export async function GET() {
       };
     });
 
-    return Response.json({
+    return jsonResponse({
       files: filesWithUrls,
       count: filesWithUrls.length,
     });
   } catch (error) {
-    return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Error desconocido",
-      },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "GET /api/upload");
   }
 }
 

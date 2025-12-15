@@ -1,36 +1,24 @@
 import { supabase } from "@/lib/supabase";
 import { createCategorySchema } from "@/validations/category";
+import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 
 export async function GET() {
   try {
     // Verificar que las variables de entorno estén configuradas
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return Response.json(
-        { error: "Variables de entorno no configuradas" },
-        { status: 500 }
-      );
+      return errorResponse("Variables de entorno no configuradas", 500);
     }
 
     const { data, error } = await supabase.from("categories").select("*");
     
     if (error) {
-      console.error("Error de Supabase:", error);
-      return Response.json(
-        { error: error.message, details: error },
-        { status: 500 }
-      );
+      console.error("[GET /api/categories] Error de Supabase:", error);
+      return errorResponse("Error al obtener categorías", 500, error.message, error.code);
     }
     
-    return Response.json(data || []);
+    return jsonResponse(data || []);
   } catch (error) {
-    console.error("Error en GET /api/categories:", error);
-    return Response.json(
-      { 
-        error: error instanceof Error ? error.message : "Error desconocido",
-        type: "unexpected_error"
-      },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "GET /api/categories");
   }
 }
 
@@ -40,32 +28,21 @@ export async function POST(req: Request) {
     const parsed = createCategorySchema.safeParse(body);
     
     if (!parsed.success) {
-      return Response.json(
-        { error: "Datos inválidos", details: parsed.error.errors },
-        { status: 400 }
-      );
+      console.error("[POST /api/categories] Error de validación:", parsed.error.errors);
+      return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
 
     const { data, error } = await supabase.from("categories").insert(parsed.data).select();
     
     if (error) {
-      console.error("Error al crear categoría:", error);
-      return Response.json(
-        { error: error.message, details: error },
-        { status: 500 }
-      );
+      console.error("[POST /api/categories] Error al crear categoría:", error);
+      return errorResponse("Error al crear la categoría", 500, error.message, error.code);
     }
     
-    return Response.json(data, { status: 201 });
+    console.log("[POST /api/categories] Categoría creada exitosamente:", data?.[0]?.id);
+    return jsonResponse(data, 201);
   } catch (error) {
-    console.error("Error en POST /api/categories:", error);
-    return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Error desconocido",
-        type: "unexpected_error",
-      },
-      { status: 500 }
-    );
+    return handleUnexpectedError(error, "POST /api/categories");
   }
 }
 
