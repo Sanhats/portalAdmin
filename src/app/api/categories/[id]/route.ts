@@ -34,11 +34,11 @@ export async function DELETE(
     }
 
     // Desasociar productos: poner category_id = null en todos los productos de esta categoría
-    const { error: detachError, count } = await supabase
+    const { error: detachError, data: detachedProducts } = await supabase
       .from("products")
       .update({ category_id: null })
       .eq("category_id", categoryId)
-      .select("id", { count: "exact" });
+      .select("id");
 
     if (detachError) {
       console.error("[DELETE /api/categories/[id]] Error al desasociar productos:", detachError);
@@ -50,10 +50,9 @@ export async function DELETE(
       );
     }
 
-    console.log(
-      "[DELETE /api/categories/[id]] Productos desasociados de la categoría:",
-      count ?? 0
-    );
+    const detachedCount = detachedProducts?.length ?? 0;
+
+    console.log("[DELETE /api/categories/[id]] Productos desasociados de la categoría:", detachedCount);
 
     // Eliminar categoría
     const { error: deleteError } = await supabase
@@ -71,7 +70,7 @@ export async function DELETE(
     return jsonResponse(
       {
         message: "Categoría eliminada correctamente. Los productos asociados quedaron sin categoría.",
-        detachedProductsCount: count ?? 0,
+        detachedProductsCount: detachedCount,
       },
       200
     );
