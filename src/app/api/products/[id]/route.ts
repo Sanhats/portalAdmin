@@ -74,7 +74,20 @@ export async function PUT(
     }
     
     const body = await req.json();
-    const parsed = productUpdateSchema.safeParse(body);
+    console.log("[PUT /api/products/[id]] Body recibido:", body);
+
+    // Normalizar categoría: aceptar tanto categoryId (camelCase) como category_id (snake_case)
+    const normalizedBody = {
+      ...body,
+      categoryId:
+        body.categoryId !== undefined
+          ? body.categoryId
+          : body.category_id !== undefined
+            ? body.category_id
+            : body.categoryId,
+    };
+
+    const parsed = productUpdateSchema.safeParse(normalizedBody);
     
     if (!parsed.success) {
       console.error("[PUT /api/products/[id]] Error de validación:", parsed.error.errors);
@@ -113,6 +126,8 @@ export async function PUT(
     if (productData.categoryId !== undefined) {
       productUpdate.category_id = productData.categoryId || null;
     }
+
+    console.log("[PUT /api/products/[id]] Campos de producto a actualizar:", productUpdate);
     
     // Actualizar producto solo si hay campos para actualizar
     if (Object.keys(productUpdate).length > 0) {

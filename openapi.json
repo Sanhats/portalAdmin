@@ -595,6 +595,92 @@
         }
       }
     },
+    "/categories/{id}": {
+      "delete": {
+        "tags": ["Categorías"],
+        "summary": "Eliminar categoría",
+        "description": "Elimina una categoría. Si hay productos asociados, no se eliminan: quedan sin categoría (category_id = null).",
+        "operationId": "deleteCategory",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "UUID de la categoría",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Categoría eliminada exitosamente. Los productos asociados quedaron sin categoría.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "detachedProductsCount": {
+                      "type": "integer",
+                      "description": "Cantidad de productos que fueron desasociados de la categoría"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ID inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No autorizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Categoría no encontrada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error del servidor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/products": {
       "get": {
         "tags": ["Productos"],

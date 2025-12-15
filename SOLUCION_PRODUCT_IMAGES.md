@@ -274,3 +274,4 @@ curl https://portal-admin-black.vercel.app/api/products/PRODUCT_ID \
 **Estado:** ✅ Implementado y probado
 
 
+
