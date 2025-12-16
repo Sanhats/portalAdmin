@@ -71,6 +71,8 @@ export const productUpdateSchema = productSchema.partial().extend({
     .optional(),
   isActive: z.boolean().optional(),
   isVisible: z.boolean().optional(),
+  // Campo de estado opcional (frontend puede enviar status directamente)
+  status: z.enum(["draft", "active", "hidden"]).optional(),
   // Variantes e imágenes
   variants: z.array(variantSchema).optional(),
   images: z.array(productImageSchema).optional(),

@@ -17,7 +17,7 @@ function normalizeProduct(product: any) {
   } else if (product.is_active && !product.is_visible) {
     status = "draft";
   } else {
-    status = "inactive";
+    status = "hidden"; // Producto inactivo o oculto
   }
 
   // Obtener datos públicos (puede venir como array o objeto en Supabase)
@@ -50,6 +50,9 @@ function normalizeProduct(product: any) {
     name,
     price: parseFloat(product.price) || 0,
     stock: product.stock || 0,
+    // Devolver tanto los flags crudos como el status derivado
+    is_active: product.is_active,
+    is_visible: product.is_visible,
     status,
     category,
     product_images,
@@ -112,7 +115,7 @@ export async function GET(req: Request) {
     const categoryId = searchParams.get("categoryId");
     const categorySlug = searchParams.get("categorySlug");
     const isFeatured = searchParams.get("isFeatured");
-    const statusFilter = searchParams.get("status"); // "active", "draft", "inactive"
+    const statusFilter = searchParams.get("status"); // "active", "draft", "hidden"
     const search = searchParams.get("search");
     const includeDeleted = searchParams.get("includeDeleted") === "true"; // SPRINT 6: Opcional incluir eliminados
     
@@ -167,7 +170,7 @@ export async function GET(req: Request) {
           query = query.eq("is_active", true).eq("is_visible", true);
         } else if (statusFilter === "draft") {
           query = query.eq("is_active", true).eq("is_visible", false);
-        } else if (statusFilter === "inactive") {
+        } else if (statusFilter === "hidden") {
           query = query.eq("is_active", false);
         }
       }

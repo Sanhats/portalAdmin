@@ -6,6 +6,29 @@ import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-re
 // Validar UUID
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
 
+/**
+ * Normaliza un producto de la BD a la estructura esperada por el frontend
+ * Incluye is_active, is_visible y status calculado
+ */
+function normalizeProductDetail(product: any) {
+  // Determinar status basado en is_active e is_visible
+  let status = "draft";
+  if (product.is_active && product.is_visible) {
+    status = "active";
+  } else if (product.is_active && !product.is_visible) {
+    status = "draft";
+  } else {
+    status = "hidden"; // Producto inactivo o oculto
+  }
+
+  return {
+    ...product,
+    is_active: product.is_active ?? true,
+    is_visible: product.is_visible ?? false,
+    status,
+  };
+}
+
 // GET /api/products/[id] - Obtener producto por ID
 export async function GET(
   req: Request,
@@ -56,7 +79,10 @@ export async function GET(
       return errorResponse("Producto no encontrado", 404);
     }
     
-    return jsonResponse(data);
+    // Normalizar producto para incluir status calculado
+    const normalizedProduct = normalizeProductDetail(data);
+    
+    return jsonResponse(normalizedProduct);
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/products/[id]");
   }
@@ -107,7 +133,7 @@ export async function PUT(
       return errorResponse("Producto no encontrado", 404);
     }
     
-    const { variants, images, product_images, ...productData } = parsed.data;
+    const { variants, images, product_images, status, ...productData } = parsed.data;
     
     // Normalizar: usar product_images si images está vacío o no está definido
     const normalizedImages = (images !== undefined) ? images : product_images;
@@ -125,6 +151,24 @@ export async function PUT(
     }
     if (productData.stock !== undefined) productUpdate.stock = productData.stock;
     if (productData.isFeatured !== undefined) productUpdate.is_featured = productData.isFeatured;
+    // Campos de estado / visibilidad
+    if (productData.isActive !== undefined) productUpdate.is_active = productData.isActive;
+    if (productData.isVisible !== undefined) productUpdate.is_visible = productData.isVisible;
+    // Si viene status directamente, mapear a is_active / is_visible
+    if (status !== undefined) {
+      if (status === "draft") {
+        productUpdate.is_active = true;
+        productUpdate.is_visible = false;
+      } else if (status === "active") {
+        productUpdate.is_active = true;
+        productUpdate.is_visible = true;
+      } else if (status === "hidden") {
+        // Interpretamos hidden como is_active=false, is_visible=false
+        // (el frontend igual puede derivar el estado desde is_active/is_visible)
+        productUpdate.is_active = false;
+        productUpdate.is_visible = false;
+      }
+    }
     if (productData.categoryId !== undefined) {
       productUpdate.category_id = productData.categoryId || null;
     }
@@ -258,7 +302,10 @@ export async function PUT(
       return errorResponse("Error al obtener el producto actualizado", 500, fetchError.message, fetchError.code);
     }
     
-    return jsonResponse(updatedProduct);
+    // Normalizar producto para incluir status calculado
+    const normalizedProduct = normalizeProductDetail(updatedProduct);
+    
+    return jsonResponse(normalizedProduct);
   } catch (error) {
     return handleUnexpectedError(error, "PUT /api/products/[id]");
   }
@@ -310,7 +357,7 @@ export async function PATCH(
       return errorResponse("Producto no encontrado", 404);
     }
     
-    const { variants, images, product_images, ...productData } = parsed.data;
+    const { variants, images, product_images, status, ...productData } = parsed.data;
     
     // Normalizar: usar product_images si images está vacío o no está definido
     const normalizedImages = (images !== undefined) ? images : (product_images || []);
@@ -345,6 +392,19 @@ export async function PATCH(
     if (productData.nameInternal !== undefined) productUpdate.name_internal = productData.nameInternal;
     if (productData.isActive !== undefined) productUpdate.is_active = productData.isActive;
     if (productData.isVisible !== undefined) productUpdate.is_visible = productData.isVisible;
+    // Si viene status directamente, mapear a is_active / is_visible
+    if (status !== undefined) {
+      if (status === "draft") {
+        productUpdate.is_active = true;
+        productUpdate.is_visible = false;
+      } else if (status === "active") {
+        productUpdate.is_active = true;
+        productUpdate.is_visible = true;
+      } else if (status === "hidden") {
+        productUpdate.is_active = false;
+        productUpdate.is_visible = false;
+      }
+    }
 
     console.log("[PATCH /api/products/[id]] Campos de producto a actualizar:", productUpdate);
     
@@ -475,7 +535,10 @@ export async function PATCH(
       return errorResponse("Error al obtener el producto actualizado", 500, fetchError.message, fetchError.code);
     }
     
-    return jsonResponse(updatedProduct);
+    // Normalizar producto para incluir status calculado
+    const normalizedProduct = normalizeProductDetail(updatedProduct);
+    
+    return jsonResponse(normalizedProduct);
   } catch (error) {
     return handleUnexpectedError(error, "PATCH /api/products/[id]");
   }
