@@ -5,18 +5,17 @@ import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-re
 // Validar UUID
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
 
-// Schema para actualizar stock
-const stockUpdateSchema = z.object({
-  stock: z.number()
-    .int("El stock debe ser un número entero")
-    .min(0, "El stock no puede ser negativo"),
+// Schema para ajustar stock (quantity puede ser positivo o negativo)
+const stockAdjustSchema = z.object({
+  quantity: z.number()
+    .int("La cantidad debe ser un número entero"),
   reason: z.string()
     .max(255, "La razón no puede exceder 255 caracteres")
     .optional(),
 });
 
-// PATCH /api/products/[id]/stock - Actualizar solo el stock del producto (SPRINT 5)
-export async function PATCH(
+// POST /api/products/[id]/stock - Ajustar stock del producto (quantity puede ser positivo o negativo)
+export async function POST(
   req: Request,
   { params }: { params: { id: string } }
 ) {
@@ -28,13 +27,13 @@ export async function PATCH(
     }
     
     const body = await req.json();
-    console.log("[PATCH /api/products/[id]/stock] Body recibido:", body);
+    console.log("[POST /api/products/[id]/stock] Body recibido:", body);
 
     // Validar datos
-    const parsed = stockUpdateSchema.safeParse(body);
+    const parsed = stockAdjustSchema.safeParse(body);
     
     if (!parsed.success) {
-      console.error("[PATCH /api/products/[id]/stock] Error de validación:", parsed.error.errors);
+      console.error("[POST /api/products/[id]/stock] Error de validación:", parsed.error.errors);
       return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
     
@@ -50,12 +49,16 @@ export async function PATCH(
       return errorResponse("Producto no encontrado", 404);
     }
     
-    const newStock = parsed.data.stock;
-    const oldStock = existingProduct.stock;
+    const oldStock = existingProduct.stock || 0;
+    const quantity = parsed.data.quantity;
+    const newStock = oldStock + quantity;
     
-    // SPRINT 5: Validar que stock no sea negativo (ya validado en schema, pero doble verificación)
+    // Validar que el stock resultante no sea negativo
     if (newStock < 0) {
-      return errorResponse("El stock no puede ser negativo", 400);
+      return errorResponse(
+        `El stock no puede ser negativo. Stock actual: ${oldStock}, cantidad solicitada: ${quantity}`,
+        400
+      );
     }
     
     // Actualizar stock
@@ -65,14 +68,13 @@ export async function PATCH(
       .eq("id", params.id);
     
     if (updateError) {
-      console.error("[PATCH /api/products/[id]/stock] Error al actualizar stock:", updateError);
+      console.error("[POST /api/products/[id]/stock] Error al actualizar stock:", updateError);
       return errorResponse("Error al actualizar el stock", 500, updateError.message, updateError.code);
     }
     
-    const difference = newStock - oldStock;
-    console.log(`[PATCH /api/products/[id]/stock] Stock actualizado: ${oldStock} -> ${newStock} (diferencia: ${difference})`);
+    console.log(`[POST /api/products/[id]/stock] Stock ajustado: ${oldStock} -> ${newStock} (cantidad: ${quantity})`);
     
-    // SPRINT 5: Registrar movimiento de stock (opcional, para ventas futuras)
+    // Registrar movimiento de stock
     try {
       const { error: movementError } = await supabase
         .from("stock_movements")
@@ -80,19 +82,19 @@ export async function PATCH(
           product_id: params.id,
           previous_stock: oldStock,
           new_stock: newStock,
-          difference: difference,
-          reason: parsed.data.reason || "Actualización manual",
+          difference: quantity, // La diferencia es la cantidad ajustada
+          reason: parsed.data.reason || "Ajuste manual",
         });
       
       if (movementError) {
         // No fallar si no se puede registrar el movimiento, solo loguear
-        console.warn("[PATCH /api/products/[id]/stock] No se pudo registrar movimiento de stock:", movementError);
+        console.warn("[POST /api/products/[id]/stock] No se pudo registrar movimiento de stock:", movementError);
       } else {
-        console.log("[PATCH /api/products/[id]/stock] Movimiento de stock registrado");
+        console.log("[POST /api/products/[id]/stock] Movimiento de stock registrado");
       }
     } catch (error) {
       // No fallar si la tabla no existe aún, solo loguear
-      console.warn("[PATCH /api/products/[id]/stock] Error al registrar movimiento (tabla puede no existir):", error);
+      console.warn("[POST /api/products/[id]/stock] Error al registrar movimiento (tabla puede no existir):", error);
     }
     
     // Obtener el producto actualizado
@@ -111,7 +113,7 @@ export async function PATCH(
       .single();
     
     if (fetchError) {
-      console.error("[PATCH /api/products/[id]/stock] Error al obtener producto actualizado:", fetchError);
+      console.error("[POST /api/products/[id]/stock] Error al obtener producto actualizado:", fetchError);
       return errorResponse("Error al obtener el producto actualizado", 500, fetchError.message, fetchError.code);
     }
     
@@ -120,11 +122,11 @@ export async function PATCH(
       stockChange: {
         previous: oldStock,
         current: newStock,
-        difference: newStock - oldStock,
+        quantity: quantity,
       },
     }, 200);
   } catch (error) {
-    return handleUnexpectedError(error, "PATCH /api/products/[id]/stock");
+    return handleUnexpectedError(error, "POST /api/products/[id]/stock");
   }
 }
 
