@@ -4,23 +4,115 @@ import { createProductSprint1Schema } from "@/validations/product-sprint1";
 import { createProductSprint3Schema } from "@/validations/product-sprint3";
 import { z } from "zod";
 import { jsonResponse, errorResponse, handleUnexpectedError, validatePagination } from "@/lib/api-response";
+import { extractBearerToken, validateBearerToken, isAdmin } from "@/lib/auth";
+
+/**
+ * Normaliza un producto de la BD a la estructura esperada por el frontend
+ */
+function normalizeProduct(product: any) {
+  // Determinar status basado en is_active e is_visible
+  let status = "draft";
+  if (product.is_active && product.is_visible) {
+    status = "active";
+  } else if (product.is_active && !product.is_visible) {
+    status = "draft";
+  } else {
+    status = "inactive";
+  }
+
+  // Obtener datos públicos (puede venir como array o objeto en Supabase)
+  const publicData = Array.isArray(product.product_public_data)
+    ? product.product_public_data[0]
+    : product.product_public_data;
+
+  // Obtener nombre: preferir name de product_public_data, luego name_internal
+  const name = publicData?.name || product.name_internal || product.name || "";
+
+  // Obtener categoría normalizada (puede venir como objeto o array)
+  const categoryData = Array.isArray(product.categories)
+    ? product.categories[0]
+    : product.categories;
+  
+  const category = categoryData
+    ? {
+        id: categoryData.id,
+        name: categoryData.name,
+      }
+    : null;
+
+  // Obtener imagen principal (primera imagen)
+  const product_images = product.product_images && product.product_images.length > 0
+    ? [{ image_url: product.product_images[0].image_url }]
+    : [];
+
+  return {
+    id: product.id,
+    name,
+    price: parseFloat(product.price) || 0,
+    stock: product.stock || 0,
+    status,
+    category,
+    product_images,
+  };
+}
 
 // GET /api/products - Listar productos con filtros, paginación e includes
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     
+    // Verificar autenticación para limit=all
+    const limitParam = searchParams.get("limit");
+    const isAllMode = limitParam?.toLowerCase() === "all";
+    
+    let user = null;
+    let userIsAdmin = false;
+    
+    if (isAllMode) {
+      // Si se solicita limit=all, verificar autenticación y rol admin
+      const authHeader = req.headers.get("authorization");
+      const token = extractBearerToken(authHeader);
+      
+      if (!token) {
+        return errorResponse("No autorizado. Token Bearer requerido para limit=all", 401);
+      }
+      
+      user = await validateBearerToken(token);
+      if (!user) {
+        return errorResponse("No autorizado. Token inválido o expirado", 401);
+      }
+      
+      userIsAdmin = isAdmin(user);
+      if (!userIsAdmin) {
+        return errorResponse("No autorizado. limit=all solo está disponible para administradores", 403);
+      }
+    }
+    
     // Validar y normalizar parámetros de paginación
-    const { page, limit, offset } = validatePagination(
-      searchParams.get("page"),
-      searchParams.get("limit")
-    );
+    let pagination;
+    try {
+      pagination = validatePagination(
+        searchParams.get("page"),
+        searchParams.get("limit"),
+        userIsAdmin
+      );
+    } catch (error: any) {
+      // Si validatePagination lanza error (p.ej. limit=all sin admin), retornar 403
+      if (error.message.includes("limit=all")) {
+        return errorResponse(error.message, 403);
+      }
+      // Otros errores de validación
+      return errorResponse(`Parámetros de paginación inválidos: ${error.message}`, 400);
+    }
+    
+    const { page, limit, offset, isAllMode: isAll } = pagination;
     
     // Filtros
     const storeId = searchParams.get("storeId"); // SPRINT 6: Multi-tenant
     const categoryId = searchParams.get("categoryId");
     const categorySlug = searchParams.get("categorySlug");
     const isFeatured = searchParams.get("isFeatured");
+    const statusFilter = searchParams.get("status"); // "active", "draft", "inactive"
     const search = searchParams.get("search");
     const includeDeleted = searchParams.get("includeDeleted") === "true"; // SPRINT 6: Opcional incluir eliminados
     
@@ -31,6 +123,7 @@ export async function GET(req: Request) {
         .from("categories")
         .select("id")
         .eq("slug", categorySlug)
+        .is("deleted_at", null)
         .single();
       
       if (category) {
@@ -39,21 +132,77 @@ export async function GET(req: Request) {
         // Si no se encuentra la categoría por slug, retornar array vacío
         return jsonResponse({
           data: [],
-          pagination: {
-            page,
-            limit,
-            total: 0,
-            totalPages: 0,
-          },
+          total: 0,
+          page: isAll ? 1 : page,
+          limit: isAll ? "all" : limit,
+          totalPages: isAll ? 1 : 0,
         });
       }
     }
     
-    // Construir query base
+    // Función auxiliar para construir filtros comunes
+    const applyFilters = (query: any) => {
+      // SPRINT 6: Filtrar por store_id (multi-tenant)
+      if (storeId) {
+        query = query.eq("store_id", storeId);
+      }
+      
+      // SPRINT 6: Excluir eliminados (soft delete) a menos que se solicite incluirlos
+      if (!includeDeleted) {
+        query = query.is("deleted_at", null);
+      }
+      
+      // Aplicar filtros
+      if (finalCategoryId) {
+        query = query.eq("category_id", finalCategoryId);
+      }
+      
+      if (isFeatured === "true") {
+        query = query.eq("is_featured", true);
+      }
+      
+      // Filtro de status
+      if (statusFilter) {
+        if (statusFilter === "active") {
+          query = query.eq("is_active", true).eq("is_visible", true);
+        } else if (statusFilter === "draft") {
+          query = query.eq("is_active", true).eq("is_visible", false);
+        } else if (statusFilter === "inactive") {
+          query = query.eq("is_active", false);
+        }
+      }
+      
+      if (search) {
+        query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,name_internal.ilike.%${search}%`);
+      }
+      
+      return query;
+    };
+    
+    // Obtener total primero (siempre usar count query separado para evitar problemas con joins)
+    let countQuery = supabase.from("products").select("*", { count: "exact", head: true });
+    countQuery = applyFilters(countQuery);
+    
+    const { count: total, error: countError } = await countQuery;
+    
+    if (countError) {
+      console.error("[GET /api/products] Error al contar productos:", countError);
+      return errorResponse("Error al contar productos", 500, countError.message, countError.code);
+    }
+    
+    // Construir query base con joins para evitar N+1
     let query = supabase
       .from("products")
       .select(`
-        *,
+        id,
+        name_internal,
+        name,
+        price,
+        stock,
+        is_active,
+        is_visible,
+        is_featured,
+        category_id,
         categories:category_id (
           id,
           name,
@@ -63,36 +212,22 @@ export async function GET(req: Request) {
           id,
           image_url
         ),
-        variants (
+        product_public_data (
           id,
           name,
-          value
+          slug,
+          description,
+          is_featured
         )
       `)
-      .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
-    
-    // SPRINT 6: Filtrar por store_id (multi-tenant)
-    if (storeId) {
-      query = query.eq("store_id", storeId);
-    }
-    
-    // SPRINT 6: Excluir eliminados (soft delete) a menos que se solicite incluirlos
-    if (!includeDeleted) {
-      query = query.is("deleted_at", null);
-    }
+      .order("created_at", { ascending: false });
     
     // Aplicar filtros
-    if (finalCategoryId) {
-      query = query.eq("category_id", finalCategoryId);
-    }
+    query = applyFilters(query);
     
-    if (isFeatured === "true") {
-      query = query.eq("is_featured", true);
-    }
-    
-    if (search) {
-      query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,name_internal.ilike.%${search}%`);
+    // Aplicar paginación solo si no es modo "all"
+    if (!isAll && typeof limit === "number") {
+      query = query.range(offset, offset + limit - 1);
     }
     
     const { data, error } = await query;
@@ -102,45 +237,21 @@ export async function GET(req: Request) {
       return errorResponse("Error al obtener productos", 500, error.message, error.code);
     }
     
-    // Obtener total para paginación
-    let countQuery = supabase.from("products").select("*", { count: "exact", head: true });
+    // Normalizar productos
+    const normalizedProducts = (data || []).map(normalizeProduct);
     
-    // SPRINT 6: Aplicar mismos filtros al count
-    if (storeId) {
-      countQuery = countQuery.eq("store_id", storeId);
-    }
+    // Asegurar que total sea un número válido
+    const totalCount = total || 0;
     
-    if (!includeDeleted) {
-      countQuery = countQuery.is("deleted_at", null);
-    }
-    
-    if (finalCategoryId) {
-      countQuery = countQuery.eq("category_id", finalCategoryId);
-    }
-    
-    if (isFeatured === "true") {
-      countQuery = countQuery.eq("is_featured", true);
-    }
-    
-    if (search) {
-      countQuery = countQuery.or(`name.ilike.%${search}%,description.ilike.%${search}%,name_internal.ilike.%${search}%`);
-    }
-    
-    const { count: total, error: countError } = await countQuery;
-    
-    if (countError) {
-      console.error("[GET /api/products] Error al contar productos:", countError);
-      return errorResponse("Error al contar productos", 500, countError.message, countError.code);
-    }
+    // Calcular totalPages
+    const totalPages = isAll ? 1 : (typeof limit === "number" ? Math.ceil(totalCount / limit) : 1);
     
     return jsonResponse({
-      data: data || [],
-      pagination: {
-        page,
-        limit,
-        total: total || 0,
-        totalPages: Math.ceil((total || 0) / limit),
-      },
+      data: normalizedProducts,
+      total: totalCount,
+      page: isAll ? 1 : page,
+      limit: isAll ? "all" : limit,
+      totalPages,
     });
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/products");
@@ -192,12 +303,12 @@ export async function POST(req: Request) {
       console.log("[POST /api/products] Modo: SPRINT 3 (Carga completa)");
       
       const parsed = createProductSprint3Schema.safeParse(body);
-      
-      if (!parsed.success) {
+    
+    if (!parsed.success) {
         console.error("[POST /api/products] Error de validación SPRINT 3:", parsed.error.errors);
-        return errorResponse("Datos inválidos", 400, parsed.error.errors);
-      }
-      
+      return errorResponse("Datos inválidos", 400, parsed.error.errors);
+    }
+    
       const data = parsed.data;
       
       // Datos internos del producto
@@ -213,7 +324,7 @@ export async function POST(req: Request) {
         is_active: data.internal.isActive,
         is_visible: data.internal.isVisible,
       };
-      
+    
       // Datos públicos (se insertarán en product_public_data)
       publicData = {
         name: data.public.name,
@@ -246,12 +357,12 @@ export async function POST(req: Request) {
         price: typeof productData.price === "number" 
           ? productData.price.toString() 
           : productData.price,
-        stock: productData.stock ?? 0,
-        category_id: productData.categoryId || null,
+      stock: productData.stock ?? 0,
+      category_id: productData.categoryId || null,
         description: productData.description || null,
         is_active: productData.isActive ?? true,
         is_visible: productData.isVisible ?? false,
-      };
+    };
     }
     
     console.log("[POST /api/products] Producto a insertar:", JSON.stringify(productToInsert, null, 2));
@@ -334,7 +445,7 @@ export async function POST(req: Request) {
     // Insertar imágenes si existen
     if (images.length > 0) {
       const imagesToInsert = images.map((image) => ({
-        product_id: product.id,
+          product_id: product.id,
         image_url: image.imageUrl,
       }));
       
@@ -361,21 +472,21 @@ export async function POST(req: Request) {
     
     // Obtener el producto completo con relaciones
     let selectQuery = `
-      *,
-      categories:category_id (
-        id,
-        name,
-        slug
-      ),
-      product_images (
-        id,
-        image_url
-      ),
-      variants (
-        id,
-        name,
-        value
-      )
+        *,
+        categories:category_id (
+          id,
+          name,
+          slug
+        ),
+        product_images (
+          id,
+          image_url
+        ),
+        variants (
+          id,
+          name,
+          value
+        )
     `;
     
     if (isSprint3) {
