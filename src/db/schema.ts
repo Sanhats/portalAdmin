@@ -25,6 +25,8 @@ export const products = pgTable("products", {
   nameInternal: text("name_internal").notNull(),
   price: numeric("price").notNull(),
   stock: integer("stock").default(0),
+  // Posición manual para ordenar productos en la tienda / panel (SPRINT 9)
+  position: integer("position").default(0),
   categoryId: uuid("category_id").references(() => categories.id),
   isActive: boolean("is_active").default(true),
   isVisible: boolean("is_visible").default(false), // SPRINT 2: false por defecto (no publicado)

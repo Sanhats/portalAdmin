@@ -106,12 +106,20 @@ export async function PUT(
     // Normalizar categoría: aceptar tanto categoryId (camelCase) como category_id (snake_case)
     const normalizedBody = {
       ...body,
+      // Aceptar tanto categoryId (camelCase) como category_id (snake_case)
       categoryId:
         body.categoryId !== undefined
           ? body.categoryId
           : body.category_id !== undefined
             ? body.category_id
             : body.categoryId,
+      // Aceptar tanto isFeatured (camelCase) como is_featured (snake_case)
+      isFeatured:
+        body.isFeatured !== undefined
+          ? body.isFeatured
+          : body.is_featured !== undefined
+            ? body.is_featured
+            : body.isFeatured,
     };
 
     const parsed = productUpdateSchema.safeParse(normalizedBody);
@@ -330,12 +338,20 @@ export async function PATCH(
     // Normalizar categoría: aceptar tanto categoryId (camelCase) como category_id (snake_case)
     const normalizedBody = {
       ...body,
+      // Aceptar tanto categoryId (camelCase) como category_id (snake_case)
       categoryId:
         body.categoryId !== undefined
           ? body.categoryId
           : body.category_id !== undefined
             ? body.category_id
             : body.categoryId,
+      // Aceptar tanto isFeatured (camelCase) como is_featured (snake_case)
+      isFeatured:
+        body.isFeatured !== undefined
+          ? body.isFeatured
+          : body.is_featured !== undefined
+            ? body.is_featured
+            : body.isFeatured,
     };
 
     const parsed = productUpdateSchema.safeParse(normalizedBody);

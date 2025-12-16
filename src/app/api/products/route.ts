@@ -17,7 +17,7 @@ function normalizeProduct(product: any) {
   } else if (product.is_active && !product.is_visible) {
     status = "draft";
   } else {
-    status = "hidden"; // Producto inactivo o oculto
+    status = "hidden"; // Producto inactivo u oculto
   }
 
   // Obtener datos públicos (puede venir como array o objeto en Supabase)
@@ -50,10 +50,15 @@ function normalizeProduct(product: any) {
     name,
     price: parseFloat(product.price) || 0,
     stock: product.stock || 0,
-    // Devolver tanto los flags crudos como el status derivado
+    // Orden manual (puede ser 0 si no se ha definido)
+    position: typeof product.position === "number" ? product.position : 0,
+    // Flags y estado derivados
     is_active: product.is_active,
     is_visible: product.is_visible,
     status,
+    // Campo de destacado (tanto snake_case como camelCase por compatibilidad)
+    is_featured: !!product.is_featured,
+    isFeatured: !!product.is_featured,
     category,
     product_images,
   };
@@ -202,6 +207,7 @@ export async function GET(req: Request) {
         name,
         price,
         stock,
+        position,
         is_active,
         is_visible,
         is_featured,
@@ -223,6 +229,8 @@ export async function GET(req: Request) {
           is_featured
         )
       `)
+      // Ordenar primero por posición manual, luego por fecha de creación (más recientes primero)
+      .order("position", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
     
     // Aplicar filtros
