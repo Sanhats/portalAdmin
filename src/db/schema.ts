@@ -75,3 +75,29 @@ export const stockMovements = pgTable("stock_movements", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Sistema de Ventas: Tabla principal de ventas
+export const sales = pgTable("sales", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  status: text("status").notNull().default("draft"), // draft | confirmed | cancelled | paid
+  totalAmount: numeric("total_amount").notNull().default("0"),
+  paymentMethod: text("payment_method"), // cash | transfer | mercadopago | other
+  notes: text("notes"),
+  createdBy: uuid("created_by").notNull(), // ID del usuario que creó la venta
+  paymentStatus: text("payment_status"), // Preparado para Mercado Pago
+  externalReference: text("external_reference"), // Preparado para Mercado Pago (vacío por ahora)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Sistema de Ventas: Items de venta (productos en la venta)
+export const saleItems = pgTable("sale_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  saleId: uuid("sale_id").references(() => sales.id, { onDelete: "cascade" }).notNull(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
+  variantId: uuid("variant_id").references(() => variants.id, { onDelete: "set null" }), // Nullable
+  quantity: integer("quantity").notNull(),
+  unitPrice: numeric("unit_price").notNull(),
+  subtotal: numeric("subtotal").notNull(),
+});
+
