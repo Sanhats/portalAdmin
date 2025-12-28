@@ -570,10 +570,26 @@ function buildEMVCoPayload(params: {
   // Usar código válido en lugar de "0000" para mejor compatibilidad
   // "5492" = Retail (comercio minorista) - código comúnmente aceptado
   const mcc = params.merchantCategoryCode || "5492";
-  payload += "52" + padLength(mcc, 4);
+  
+  // Validar que MCC sea string y tenga exactamente 4 dígitos
+  if (typeof mcc !== "string") {
+    throw new Error(`Merchant Category Code debe ser string, recibido: ${typeof mcc}`);
+  }
+  if (mcc.length !== 4) {
+    throw new Error(`Merchant Category Code debe tener 4 dígitos, recibido: "${mcc}" (${mcc.length} caracteres)`);
+  }
+  
+  // Generar campo 52: [ID][LENGTH][VALUE]
+  const campo52 = "52" + padLength(mcc, 2);
+  payload += campo52;
+  
+  // Debug logging (remover en producción)
+  if (process.env.NODE_ENV === "development") {
+    console.log(`[buildEMVCoPayload] Campo 52 - MCC: "${mcc}", Longitud: ${mcc.length}, Campo completo: "${campo52}"`);
+  }
   
   // 53: Transaction Currency (3 dígitos)
-  payload += "53" + padLength("032", 3); // 032 = ARS (Peso Argentino)
+  payload += "53" + padLength("032", 2); // Longitud siempre 2 dígitos en EMVCo
   
   // 54: Transaction Amount (hasta 13 dígitos, sin decimales en formato EMVCo)
   // Solo incluir si es monto fijo
@@ -599,13 +615,14 @@ function buildEMVCoPayload(params: {
   
   // 62: Additional Data Field Template
   // Incluir reference en el campo adicional
-  const additionalData = "05" + padLength(params.reference, 25); // 05 = Reference Label
+  const normalizedRef = params.reference.substring(0, 25); // Máximo 25 caracteres
+  const additionalData = "05" + padLength(normalizedRef, 2); // 05 = Reference Label, longitud 2 dígitos
   payload += "62" + padLength(additionalData, 2);
   
   // 63: CRC (Cyclic Redundancy Check) - 4 dígitos hexadecimales
   // Simplificado: usar hash simple para testing
   const crc = calculateSimpleCRC(payload);
-  payload += "63" + padLength(crc, 4);
+  payload += "63" + padLength(crc, 2); // Longitud siempre 2 dígitos en EMVCo
   
   return payload;
 }

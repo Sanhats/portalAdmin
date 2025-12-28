@@ -167,7 +167,36 @@ try {
         if ($metadata.qr_payload) {
             $payloadLength = $metadata.qr_payload.Length
             Write-Host "  QR Payload: [EMVCo] ($payloadLength caracteres)" -ForegroundColor Gray
-            Write-Host "  Payload preview: $($metadata.qr_payload.Substring(0, [Math]::Min(50, $payloadLength)))..." -ForegroundColor DarkGray
+            Write-Host "  Payload completo: $($metadata.qr_payload)" -ForegroundColor DarkGray
+            Write-Host ""
+            
+            # Analizar campo 52 (Merchant Category Code)
+            $payload = $metadata.qr_payload
+            if ($payload -match '52(\d{2})(\d{4})') {
+                $campo52Length = $matches[1]
+                $campo52Value = $matches[2]
+                Write-Host "  Campo 52 (Merchant Category Code):" -ForegroundColor Yellow
+                Write-Host "    Longitud: $campo52Length" -ForegroundColor White
+                Write-Host "    Valor: $campo52Value" -ForegroundColor White
+                
+                if ($campo52Length -eq "00") {
+                    Write-Host "    ERROR: Longitud es 00 (incorrecto)" -ForegroundColor Red
+                    Write-Host "    Deberia ser: 04" -ForegroundColor Yellow
+                } elseif ($campo52Length -eq "04") {
+                    Write-Host "    OK: Longitud correcta" -ForegroundColor Green
+                } else {
+                    Write-Host "    WARNING: Longitud inesperada: $campo52Length" -ForegroundColor Yellow
+                }
+                
+                if ($campo52Value -eq "5492") {
+                    Write-Host "    OK: Valor correcto (5492 = Retail)" -ForegroundColor Green
+                } else {
+                    Write-Host "    Valor: $campo52Value" -ForegroundColor White
+                }
+            } else {
+                Write-Host "  WARNING: No se pudo encontrar el campo 52 en el payload" -ForegroundColor Yellow
+            }
+            Write-Host ""
         }
         
         Write-Host ""
