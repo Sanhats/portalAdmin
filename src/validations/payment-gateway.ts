@@ -10,9 +10,10 @@ export const gatewayProviderSchema = z.enum([
   'pos',
   'stripe',
   'paypal',
-  'other'
+  'other',
+  'interoperable_qr'
 ], {
-  errorMap: () => ({ message: "El provider debe ser: mercadopago, qr, pos, stripe, paypal u other" })
+  errorMap: () => ({ message: "El provider debe ser: mercadopago, qr, pos, stripe, paypal, other o interoperable_qr" })
 });
 
 export const createPaymentGatewaySchema = z.object({

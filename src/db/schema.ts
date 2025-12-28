@@ -187,6 +187,37 @@ export const payments = pgTable("payments", {
   // SPRINT F: Campos para POS (opcional)
   terminalId: text("terminal_id"), // ID del terminal POS
   cashRegisterId: text("cash_register_id"), // ID de la caja/turno
+  // SPRINT I: Campos para motor de matching
+  matchConfidence: numeric("match_confidence").default("0.0"), // 0.0 a 1.0
+  matchedTransferId: uuid("matched_transfer_id"), // FK a incoming_transfers
+  matchResult: text("match_result").default("no_match"), // 'matched_auto' | 'matched_suggested' | 'no_match'
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT H: Movimientos entrantes (transferencias recibidas)
+export const incomingTransfers = pgTable("incoming_transfers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  amount: numeric("amount").notNull(),
+  reference: text("reference"), // Referencia única del pago (ej: SALE-8F3A)
+  originLabel: text("origin_label"), // "BBVA", "MP", "NaranjaX", "MODO", etc.
+  rawDescription: text("raw_description"), // Descripción completa de la transferencia
+  source: text("source").notNull().default("manual"), // 'api' | 'csv' | 'manual'
+  receivedAt: timestamp("received_at").notNull(), // Fecha/hora cuando se recibió el dinero
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT K: Auditoría de confirmaciones de pagos
+export const paymentConfirmations = pgTable("payment_confirmations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "cascade" }).notNull(),
+  transferId: uuid("transfer_id").references(() => incomingTransfers.id, { onDelete: "set null" }),
+  confirmationType: text("confirmation_type").notNull(), // 'auto' | 'assisted' | 'manual'
+  confidenceScore: numeric("confidence_score"), // Score de confianza usado para la decisión
+  confirmedBy: uuid("confirmed_by"), // ID del usuario que confirmó (NULL si fue automático)
+  confirmedAt: timestamp("confirmed_at").defaultNow(),
+  reason: text("reason"), // Razón de la confirmación
   createdAt: timestamp("created_at").defaultNow(),
 });
 

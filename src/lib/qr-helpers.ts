@@ -9,8 +9,9 @@ import { GatewayFactory } from "@/lib/gateway-interface";
 export interface QRGenerationResult {
   qr_code: string; // URL o base64 del QR
   qr_payload: string; // Payload del QR (EMVCo o genérico)
-  provider: string; // 'mercadopago' | 'generic_qr'
+  provider: string; // 'mercadopago_instore' | 'generic_qr' | 'interoperable_qr'
   expires_at?: string; // ISO-8601 timestamp (opcional)
+  reference?: string; // Referencia única del pago (ej: SALE-8F3A)
 }
 
 /**
@@ -24,7 +25,55 @@ export async function generateQRPayment(
   qrType: "static" | "dynamic" = "dynamic"
 ): Promise<QRGenerationResult> {
   try {
-    // Intentar obtener gateway de Mercado Pago configurado
+    // SPRINT G: Prioridad 1: Intentar QR Interoperable si está configurado
+    const { data: interoperableGateway, error: interoperableError } = await supabase
+      .from("payment_gateways")
+      .select("id, provider, config, enabled")
+      .eq("tenant_id", tenantId)
+      .eq("provider", "interoperable_qr")
+      .eq("enabled", true)
+      .single();
+
+    if (interoperableGateway && !interoperableError) {
+      console.log(`[generateQRPayment] Gateway QR Interoperable encontrado`);
+      try {
+        // Parsear config si viene como string
+        let config = interoperableGateway.config;
+        if (typeof config === 'string') {
+          try {
+            config = JSON.parse(config);
+          } catch {
+            console.warn("[generateQRPayment] No se pudo parsear config como JSON");
+          }
+        }
+        
+        const cbu = config?.merchant_cbu || config?.merchant_cvu;
+        const merchantName = config?.merchant_name;
+        
+        if (cbu) {
+          // Generar reference única
+          const reference = `SALE-${saleId.substring(0, 8).toUpperCase()}`;
+          
+          const qrResult = await generateInteroperableQR(
+            saleId,
+            amount,
+            reference,
+            tenantId,
+            cbu,
+            merchantName
+          );
+          console.log(`[generateQRPayment] ✅ QR Interoperable generado`);
+          return qrResult;
+        } else {
+          console.warn("[generateQRPayment] Gateway interoperable_qr configurado pero sin CBU/CVU");
+        }
+      } catch (error: any) {
+        console.error("[generateQRPayment] Error al generar QR Interoperable:", error);
+        console.warn("[generateQRPayment] Continuando con otros métodos...");
+      }
+    }
+
+    // Prioridad 2: Intentar obtener gateway de Mercado Pago configurado
     const { data: mpGateway, error: gatewayError } = await supabase
       .from("payment_gateways")
       .select("id, provider, credentials, config, enabled")
@@ -35,21 +84,37 @@ export async function generateQRPayment(
 
     // Si hay un gateway de Mercado Pago configurado y habilitado, intentar usarlo
     if (mpGateway && !gatewayError && mpGateway.credentials) {
+      console.log(`[generateQRPayment] Gateway Mercado Pago encontrado`);
+      
       try {
+        // Parsear config si viene como string (JSONB puede venir como string)
+        let config = mpGateway.config;
+        if (typeof config === 'string') {
+          try {
+            config = JSON.parse(config);
+          } catch {
+            console.warn("[generateQRPayment] No se pudo parsear config como JSON");
+          }
+        }
+        
         const qrResult = await generateMercadoPagoQR(
           mpGateway.credentials as any,
+          config,
           saleId,
           amount,
           qrType
         );
+        console.log(`[generateQRPayment] ✅ QR generado con Mercado Pago In-Store`);
         return qrResult;
-      } catch (error) {
-        console.warn("[generateQRPayment] Error al generar QR con Mercado Pago, usando genérico:", error);
+      } catch (error: any) {
+        console.error("[generateQRPayment] Error al generar QR con Mercado Pago:", error);
+        console.warn("[generateQRPayment] Usando QR genérico como fallback");
         // Continuar con QR genérico si falla MP
       }
     }
 
     // Fallback: Generar QR genérico
+    console.log(`[generateQRPayment] Usando QR genérico (fallback)`);
     return generateGenericQR(saleId, amount, qrType);
   } catch (error) {
     console.error("[generateQRPayment] Error al generar QR:", error);
@@ -61,10 +126,15 @@ export async function generateQRPayment(
 /**
  * Genera QR usando Mercado Pago In-Store API
  * Nota: Mercado Pago In-Store requiere un access token con permisos específicos
- * Para usar esta función, el tenant debe tener configurado user_id y external_pos_id en el gateway config
+ * Requiere: mercadopago_user_id (collector_id) y mercadopago_external_pos_id configurados
+ * 
+ * Fuentes de configuración (en orden de prioridad):
+ * 1. Gateway config (config.mercadopago_user_id, config.mercadopago_external_pos_id)
+ * 2. Variables de entorno (MERCADOPAGO_USER_ID, MERCADOPAGO_EXTERNAL_POS_ID)
  */
 async function generateMercadoPagoQR(
   credentials: { access_token?: string },
+  config: any,
   saleId: string,
   amount: number,
   qrType: "static" | "dynamic"
@@ -75,72 +145,152 @@ async function generateMercadoPagoQR(
     throw new Error("Mercado Pago access token no disponible");
   }
 
-  // Para QR dinámico, usar Mercado Pago In-Store API
-  // Documentación: https://www.mercadopago.com.ar/developers/es/docs/qr-code/integration-api/qr-code-generation
-  // NOTA: Esta implementación requiere user_id y external_pos_id configurados en el gateway
-  // Por ahora, si no están configurados, usar QR genérico
-  
-  // TODO: Obtener user_id y external_pos_id del gateway config
-  // Por ahora, lanzar error para que use QR genérico
-  throw new Error("Mercado Pago In-Store requiere configuración adicional (user_id, external_pos_id). Usando QR genérico.");
-  
-  // Código futuro cuando se configure:
-  /*
-  if (qrType === "dynamic") {
+  // Obtener user_id y external_pos_id (prioridad: config > env)
+  // El config puede venir como objeto o como string JSON desde Supabase
+  let parsedConfig = config;
+  if (typeof config === 'string') {
     try {
-      const userId = config.user_id; // Obtener del gateway config
-      const externalPosId = config.external_pos_id; // Obtener del gateway config
-      
-      const response = await fetch(`https://api.mercadopago.com/instore/orders/qr/seller/collectors/${userId}/pos/${externalPosId}/qrs`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          external_reference: saleId,
-          title: `Venta ${saleId}`,
-          description: `Pago de venta ${saleId}`,
-          notification_url: process.env.NEXT_PUBLIC_APP_URL 
-            ? `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/mercadopago`
-            : undefined,
-          total_amount: amount,
-          items: [
-            {
-              sku_number: saleId,
-              category: "VENTA",
-              title: `Venta ${saleId}`,
-              description: `Pago de venta ${saleId}`,
-              unit_price: amount,
-              quantity: 1,
-              unit_measure: "unit",
-              total_amount: amount,
-            },
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Mercado Pago API error: ${response.status} - ${JSON.stringify(errorData)}`);
-      }
-
-      const qrData = await response.json();
-
-      return {
-        qr_code: qrData.qr_data || qrData.qr_code || "",
-        qr_payload: qrData.qr_data || "",
-        provider: "mercadopago",
-        expires_at: qrData.expiration_date || undefined,
-      };
-    } catch (error: any) {
-      console.error("[generateMercadoPagoQR] Error al crear QR con Mercado Pago In-Store:", error);
-      throw error;
+      parsedConfig = JSON.parse(config);
+    } catch {
+      console.warn("[generateMercadoPagoQR] No se pudo parsear config como JSON");
     }
-  } else {
+  }
+  
+  const userId = parsedConfig?.mercadopago_user_id || process.env.MERCADOPAGO_USER_ID;
+  const externalPosId = parsedConfig?.mercadopago_external_pos_id || process.env.MERCADOPAGO_EXTERNAL_POS_ID;
+
+  console.log(`[generateMercadoPagoQR] Valores obtenidos:`, {
+    userId,
+    externalPosId,
+    fromConfig: !!parsedConfig?.mercadopago_user_id,
+    fromEnv: !!process.env.MERCADOPAGO_USER_ID,
+  });
+
+  if (!userId || !externalPosId) {
+    throw new Error(
+      `Mercado Pago In-Store requiere configuración: user_id=${userId ? '✅' : '❌'}, external_pos_id=${externalPosId ? '✅' : '❌'}. ` +
+      `Configura en gateway.config o variables de entorno (MERCADOPAGO_USER_ID, MERCADOPAGO_EXTERNAL_POS_ID)`
+    );
+  }
+
+  // Solo QR dinámico usa In-Store API
+  if (qrType !== "dynamic") {
+    console.log("[generateMercadoPagoQR] QR estático no soportado por In-Store, usando genérico");
     return generateGenericQR(saleId, amount, qrType);
   }
-  */
+
+  try {
+    console.log(`[generateMercadoPagoQR] Creando QR In-Store con user_id=${userId}, external_pos_id=${externalPosId}`);
+    
+    // Llamar a Mercado Pago In-Store API
+    // Documentación: https://www.mercadopago.com.ar/developers/es/docs/qr-code/integration-api/qr-code-generation
+    // Nota: El endpoint puede requerir external_id en lugar de ID numérico
+    // Si externalPosId es numérico y no funciona, puede que necesitemos buscar el external_id del POS
+    const apiUrl = `https://api.mercadopago.com/instore/orders/qr/seller/collectors/${userId}/pos/${externalPosId}/qrs`;
+    
+    console.log(`[generateMercadoPagoQR] Endpoint URL: ${apiUrl}`);
+    
+    const notificationUrl = process.env.NEXT_PUBLIC_APP_URL 
+      ? `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/mercadopago`
+      : undefined;
+
+    // Formato según documentación de Mercado Pago In-Store API
+    // Nota: El formato puede variar según la versión de la API
+    const requestBody: any = {
+      external_reference: saleId,
+      title: `Venta ${saleId}`,
+      description: `Pago de venta ${saleId}`,
+      total_amount: amount,
+      items: [
+        {
+          sku_number: saleId,
+          category: "VENTA",
+          title: `Venta ${saleId}`,
+          description: `Pago de venta ${saleId}`,
+          unit_price: amount,
+          quantity: 1,
+          unit_measure: "unit",
+          total_amount: amount,
+        },
+      ],
+    };
+    
+    // Agregar notification_url solo si está disponible
+    if (notificationUrl) {
+      requestBody.notification_url = notificationUrl;
+    }
+
+    console.log(`[generateMercadoPagoQR] Request URL: ${apiUrl}`);
+    console.log(`[generateMercadoPagoQR] Request body:`, JSON.stringify(requestBody, null, 2));
+
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      let errorData: any = {};
+      let errorText = "";
+      
+      try {
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          errorData = await response.json();
+        } else {
+          errorText = await response.text();
+        }
+      } catch (e) {
+        errorText = `No se pudo leer respuesta: ${e}`;
+      }
+      
+      console.error(`[generateMercadoPagoQR] Error ${response.status}:`, errorData || errorText);
+      console.error(`[generateMercadoPagoQR] Request URL: ${apiUrl}`);
+      console.error(`[generateMercadoPagoQR] Request body:`, JSON.stringify(requestBody, null, 2));
+      
+      // Mensaje de error más descriptivo
+      let errorMessage = `Mercado Pago In-Store API error: ${response.status}`;
+      if (errorData?.message) {
+        errorMessage += ` - ${errorData.message}`;
+      } else if (errorText) {
+        errorMessage += ` - ${errorText}`;
+      }
+      
+      // Si es 401 "user not found", puede ser problema de permisos o formato
+      if (response.status === 401 && (errorData?.message?.includes("user not found") || errorText?.includes("user not found"))) {
+        errorMessage += "\nPosibles causas:\n";
+        errorMessage += "- El access token no tiene permisos para In-Store API\n";
+        errorMessage += "- El user_id no coincide con el del access token\n";
+        errorMessage += "- El access token necesita permisos adicionales en Mercado Pago Dashboard";
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const qrData = await response.json();
+    console.log(`[generateMercadoPagoQR] ✅ QR creado exitosamente:`, {
+      qr_data_length: qrData.qr_data?.length || 0,
+      expiration_date: qrData.expiration_date,
+      in_store_order_id: qrData.in_store_order_id,
+    });
+
+    // Mercado Pago devuelve el QR en formato EMVCo (qr_data)
+    // Generar imagen QR del payload para que sea renderizable
+    const qrCodeBase64 = await generateQRCodeBase64(qrData.qr_data);
+
+    return {
+      qr_code: qrCodeBase64, // Imagen QR en base64
+      qr_payload: qrData.qr_data, // Payload EMVCo de Mercado Pago
+      provider: "mercadopago_instore",
+      expires_at: qrData.expiration_date || undefined,
+    };
+  } catch (error: any) {
+    console.error("[generateMercadoPagoQR] Error al crear QR con Mercado Pago In-Store:", error);
+    throw error;
+  }
 }
 
 /**
@@ -211,6 +361,246 @@ async function generateQRCodeBase64(data: string): Promise<string> {
     // Fallback: retornar placeholder si falla la generación
     return `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==`;
   }
+}
+
+/**
+ * SPRINT G: Genera QR Interoperable con formato EMVCo Argentina (Transferencias 3.0)
+ * Escaneable por cualquier billetera: MODO, Naranja X, MP, Bancos, etc.
+ * 
+ * @param saleId ID de la venta
+ * @param amount Monto del pago (null para monto abierto)
+ * @param reference Referencia única del pago (ej: SALE-8F3A)
+ * @param tenantId ID del tenant (requerido para obtener configuración)
+ * @param cbu CVU/CBU del comercio (opcional, se obtiene de BD o env si no se proporciona)
+ * @param merchantName Nombre del comercio (opcional, se obtiene de BD o env si no se proporciona)
+ * @returns QR interoperable en formato EMVCo Argentina
+ */
+export async function generateInteroperableQR(
+  saleId: string,
+  amount: number | null,
+  reference: string,
+  tenantId: string,
+  cbu?: string,
+  merchantName?: string
+): Promise<QRGenerationResult> {
+  try {
+    // Generar referencia única si no se proporciona
+    const paymentReference = reference || `SALE-${saleId.substring(0, 8).toUpperCase()}`;
+    
+    // Obtener configuración del comercio (prioridad: parámetros > BD > env)
+    const merchantConfig = await getMerchantConfig(tenantId, cbu, merchantName);
+    
+    if (!merchantConfig.cbu) {
+      throw new Error(
+        "CBU/CVU del comercio no configurado. " +
+        "Configura en payment_gateways (provider='interoperable_qr') o variables de entorno (MERCHANT_CBU/MERCHANT_CVU)"
+      );
+    }
+    
+    // Generar payload EMVCo Argentina según especificación Transferencias 3.0
+    // Formato: https://www.bcra.gob.ar/Noticias/BCRA-otro-paso-pagos-QR.asp
+    let qrPayload = "";
+    
+    if (amount !== null && amount > 0) {
+      // QR con monto fijo
+      qrPayload = buildEMVCoPayload({
+        type: "fixed",
+        amount: amount,
+        reference: paymentReference,
+        cbu: merchantConfig.cbu,
+        merchantName: merchantConfig.name,
+      });
+    } else {
+      // QR con monto abierto (el usuario ingresa el monto)
+      qrPayload = buildEMVCoPayload({
+        type: "open",
+        reference: paymentReference,
+        cbu: merchantConfig.cbu,
+        merchantName: merchantConfig.name,
+      });
+    }
+    
+    // Generar imagen QR en base64
+    const qrCodeBase64 = await generateQRCodeBase64(qrPayload);
+    
+    // Calcular expiración (30 minutos por defecto)
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    
+    console.log(`[generateInteroperableQR] QR interoperable generado:`, {
+      reference: paymentReference,
+      amount: amount || "abierto",
+      provider: "interoperable_qr",
+    });
+    
+    return {
+      qr_code: qrCodeBase64,
+      qr_payload: qrPayload,
+      provider: "interoperable_qr",
+      expires_at: expiresAt,
+      reference: paymentReference,
+    };
+  } catch (error: any) {
+    console.error("[generateInteroperableQR] Error al generar QR interoperable:", error);
+    throw new Error(`Error al generar QR interoperable: ${error.message}`);
+  }
+}
+
+/**
+ * Obtiene configuración del comercio para QR interoperable
+ * Prioridad: parámetros > payment_gateways config > stores > variables de entorno
+ */
+async function getMerchantConfig(
+  tenantId: string,
+  providedCBU?: string,
+  providedName?: string
+): Promise<{ cbu?: string; name: string }> {
+  // Si se proporcionan parámetros, usarlos directamente
+  if (providedCBU && providedName) {
+    return { cbu: providedCBU, name: providedName };
+  }
+
+  try {
+    // Intentar obtener desde payment_gateways (provider='interoperable_qr')
+    const { data: gateway, error: gatewayError } = await supabase
+      .from("payment_gateways")
+      .select("config")
+      .eq("tenant_id", tenantId)
+      .eq("provider", "interoperable_qr")
+      .eq("enabled", true)
+      .single();
+
+    if (!gatewayError && gateway?.config) {
+      const config = typeof gateway.config === 'string' 
+        ? JSON.parse(gateway.config) 
+        : gateway.config;
+      
+      const cbu = providedCBU || config.merchant_cbu || config.merchant_cvu;
+      const name = providedName || config.merchant_name;
+      
+      if (cbu && name) {
+        return { cbu, name };
+      }
+    }
+
+    // Intentar obtener desde stores (nombre del comercio)
+    const { data: store, error: storeError } = await supabase
+      .from("stores")
+      .select("name")
+      .eq("id", tenantId)
+      .single();
+
+    const storeName = !storeError && store?.name ? store.name : undefined;
+
+    // Combinar con variables de entorno
+    const cbu = providedCBU || process.env.MERCHANT_CBU || process.env.MERCHANT_CVU;
+    const name = providedName || storeName || process.env.MERCHANT_NAME || "Comercio";
+
+    return { cbu, name };
+  } catch (error) {
+    console.warn("[getMerchantConfig] Error al obtener configuración, usando fallback:", error);
+    // Fallback a variables de entorno
+    return {
+      cbu: providedCBU || process.env.MERCHANT_CBU || process.env.MERCHANT_CVU,
+      name: providedName || process.env.MERCHANT_NAME || "Comercio",
+    };
+  }
+}
+
+/**
+ * Construye payload EMVCo Argentina para Transferencias 3.0
+ * Formato basado en especificación BCRA para QR interoperable
+ */
+function buildEMVCoPayload(params: {
+  type: "fixed" | "open";
+  amount?: number;
+  reference: string;
+  cbu?: string;
+  merchantName: string;
+}): string {
+  // Formato EMVCo simplificado para Argentina
+  // Estructura básica: 00 (Payload Format Indicator) + 01 (Point of Initiation) + 26 (Merchant Account Info) + 52 (Merchant Category) + 53 (Currency) + 54 (Amount) + 58 (Country) + 59 (Merchant Name) + 60 (Merchant City) + 62 (Additional Data)
+  
+  let payload = "";
+  
+  // 00: Payload Format Indicator (2 dígitos)
+  payload += "00" + padLength("01", 2); // "01" = QR Code
+  
+  // 01: Point of Initiation Method (2 dígitos)
+  // "11" = Static QR, "12" = Dynamic QR
+  payload += "01" + padLength(params.type === "fixed" ? "11" : "12", 2);
+  
+  // 26: Merchant Account Information (hasta 99 caracteres)
+  if (params.cbu) {
+    // Formato: 00 (GUI) + 01 (CBU/CVU) + 02 (Reference)
+    const accountInfo = 
+      "00" + padLength("AR", 2) + // GUI Argentina
+      "01" + padLength(params.cbu, 22) + // CBU/CVU (22 dígitos)
+      "02" + padLength(params.reference, 25); // Reference (máx 25 caracteres)
+    
+    payload += "26" + padLength(accountInfo, 2);
+  }
+  
+  // 52: Merchant Category Code (4 dígitos)
+  payload += "52" + padLength("0000", 4); // 0000 = General
+  
+  // 53: Transaction Currency (3 dígitos)
+  payload += "53" + padLength("032", 3); // 032 = ARS (Peso Argentino)
+  
+  // 54: Transaction Amount (hasta 13 dígitos)
+  if (params.type === "fixed" && params.amount) {
+    const amountStr = params.amount.toFixed(2).replace(".", "");
+    payload += "54" + padLength(amountStr, 2);
+  }
+  
+  // 58: Country Code (2 dígitos)
+  payload += "58" + padLength("AR", 2); // AR = Argentina
+  
+  // 59: Merchant Name (hasta 25 caracteres)
+  const merchantName = params.merchantName.substring(0, 25);
+  payload += "59" + padLength(merchantName, 2);
+  
+  // 60: Merchant City (hasta 15 caracteres)
+  payload += "60" + padLength("Argentina", 2); // Ciudad por defecto
+  
+  // 62: Additional Data Field Template
+  // Incluir reference en el campo adicional
+  const additionalData = "05" + padLength(params.reference, 25); // 05 = Reference Label
+  payload += "62" + padLength(additionalData, 2);
+  
+  // 63: CRC (Cyclic Redundancy Check) - 4 dígitos hexadecimales
+  // Simplificado: usar hash simple para testing
+  const crc = calculateSimpleCRC(payload);
+  payload += "63" + padLength(crc, 4);
+  
+  return payload;
+}
+
+/**
+ * Calcula CRC simplificado para EMVCo (para testing)
+ * En producción, usar algoritmo CRC16-CCITT estándar
+ */
+function calculateSimpleCRC(data: string): string {
+  // Implementación simplificada - en producción usar librería CRC16-CCITT
+  let crc = 0xFFFF;
+  for (let i = 0; i < data.length; i++) {
+    crc ^= data.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      if (crc & 0x8000) {
+        crc = (crc << 1) ^ 0x1021;
+      } else {
+        crc <<= 1;
+      }
+    }
+  }
+  return (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, "0");
+}
+
+/**
+ * Formatea longitud de campo EMVCo
+ */
+function padLength(value: string, lengthDigits: number): string {
+  const length = value.length.toString().padStart(lengthDigits, "0");
+  return length + value;
 }
 
 /**

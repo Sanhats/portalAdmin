@@ -238,6 +238,26 @@ x-tenant-id: <tenant_id> (opcional)
         }
       },
       "payment_methods": null
+    },
+    {
+      "id": "uuid",
+      "amount": "10000.00",
+      "method": "qr",
+      "status": "pending",
+      "external_reference": "QR-abc123-1234567890",
+      "gateway_metadata": {
+        "qr_code": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+        "qr_payload": "00020101021243650016COM.MERCADOLIVRE02008...",
+        "provider": "mercadopago_instore",
+        "expires_at": "2024-12-23T11:00:00Z"
+      },
+      "payment_methods": {
+        "id": "uuid",
+        "code": "qr_generic",
+        "label": "QR Genérico",
+        "type": "qr",
+        "is_active": true
+      }
     }
   ],
   "summary": {
@@ -262,10 +282,16 @@ x-tenant-id: <tenant_id> (opcional)
 - Valores calculados en tiempo real
 
 #### `payments[].gateway_metadata`
-- Solo presente para pagos de gateway externo (`mercadopago`, etc.)
-- **`init_point`**: URL de checkout (para redirigir al usuario)
-- **`preference_id`**: ID de la preference en Mercado Pago
-- **`last_webhook`**: Último webhook recibido (si aplica)
+- Solo presente para pagos de gateway externo (`mercadopago`, etc.) o QR (`mercadopago_instore`, `generic_qr`)
+- **Para pagos online (MP Checkout):**
+  - **`init_point`**: URL de checkout (para redirigir al usuario)
+  - **`preference_id`**: ID de la preference en Mercado Pago
+  - **`last_webhook`**: Último webhook recibido (si aplica)
+- **Para pagos QR:**
+  - **`qr_code`**: Imagen QR en base64 (data:image/png;base64,...)
+  - **`qr_payload`**: Payload del QR (EMVCo para MP, JSON para genérico)
+  - **`provider`**: `"mercadopago_instore"` (escaneable MP) o `"generic_qr"` (testing)
+  - **`expires_at`**: Fecha de expiración (ISO-8601, opcional)
 
 ### 3.4 Errores
 
@@ -537,9 +563,12 @@ POST /api/sales/123/payments
 
 | Campo | Descripción | Ejemplo |
 |-------|-------------|---------|
-| `gateway_metadata.provider` | Proveedor del gateway | `"mercadopago"` |
-| `gateway_metadata.preference_id` | ID de la preference | `"1231202386-..."` |
-| `gateway_metadata.init_point` | URL de checkout | `"https://www.mercadopago.com.ar/..."` |
+| `gateway_metadata.provider` | Proveedor del gateway | `"mercadopago"`, `"mercadopago_instore"`, `"generic_qr"` |
+| `gateway_metadata.preference_id` | ID de la preference (solo MP Checkout) | `"1231202386-..."` |
+| `gateway_metadata.init_point` | URL de checkout (solo MP Checkout) | `"https://www.mercadopago.com.ar/..."` |
+| `gateway_metadata.qr_code` | Imagen QR en base64 (solo QR) | `"data:image/png;base64,..."` |
+| `gateway_metadata.qr_payload` | Payload del QR (solo QR) | `"000201010212..."` o `"{...}"` |
+| `gateway_metadata.expires_at` | Fecha de expiración del QR (solo QR) | `"2024-12-23T11:00:00Z"` |
 | `gateway_metadata.last_webhook.status` | Estado del último webhook | `"pending"` |
 | `gateway_metadata.last_webhook.timestamp` | Timestamp del webhook | `"2024-12-23T10:00:00Z"` |
 | `external_reference` | Referencia externa | `"QR-123-456"` |
@@ -558,7 +587,9 @@ POST /api/sales/123/payments
 ✅ **Seguro mostrar:**
 - Estado del pago (`status`)
 - Monto (`amount`)
-- URL de checkout (`init_point`)
+- URL de checkout (`init_point`) - solo para pagos online
+- Imagen QR (`gateway_metadata.qr_code`) - solo para pagos QR
+- Provider (`gateway_metadata.provider`)
 - ID de referencia externa (`external_reference`)
 
 ❌ **NUNCA mostrar:**
@@ -566,6 +597,7 @@ POST /api/sales/123/payments
 - Tokens de acceso
 - Secrets
 - Payloads completos de webhooks
+- `gateway_metadata.qr_payload` (solo usar para debugging, no mostrar al usuario)
 
 ---
 
@@ -590,11 +622,18 @@ POST /api/sales/123/payments
 - 🔔 Opción para confirmar manualmente (botón)
 - ⏱️ Tiempo máximo sugerido: 5 minutos
 
-#### Pagos External (Mercado Pago)
+#### Pagos External (Mercado Pago Online)
 - 🔄 Mostrar loading mientras está pendiente
 - 🔔 Polling opcional cada 10 segundos (máx 3 minutos)
 - ✅ Webhook actualiza automáticamente
 - ⏱️ Tiempo esperado: 5-30 segundos después del pago
+
+#### Pagos QR (Mercado Pago In-Store)
+- 📱 Mostrar QR inmediatamente (`gateway_metadata.qr_code`)
+- 🔍 Verificar `provider === "mercadopago_instore"` para QR escaneable
+- ⏱️ Tiempo esperado: Inmediato (QR generado al instante)
+- 🔔 Webhook actualiza cuando el usuario escanea y paga
+- ⚠️ Si `provider === "generic_qr"`, el QR NO es escaneable por MP (solo testing)
 
 ### 9.3 Estrategia de Polling (Opcional)
 
@@ -647,10 +686,14 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 1. Crear venta y confirmar
 2. Crear pago QR (POST /api/sales/:id/payments/qr)
    Body: { "qrType": "dynamic" }
-3. Verificar: status = "pending", qrCode presente
-4. Confirmar manualmente (POST /api/payments/:id/confirm)
+3. Verificar: 
+   - status = "pending"
+   - gateway_metadata.qr_code presente (base64)
+   - gateway_metadata.provider = "mercadopago_instore" (si está configurado) o "generic_qr"
+4. Renderizar QR usando gateway_metadata.qr_code
+5. Confirmar manualmente (POST /api/payments/:id/confirm)
    Body: { "proofType": "qr_code", "proofReference": "QR-123" }
-5. Verificar: status = "confirmed", balance actualizado
+6. Verificar: status = "confirmed", balance actualizado
 ```
 
 #### 3. Pago Mercado Pago
@@ -668,7 +711,10 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 #### ✅ Casos Exitosos
 - [ ] Crear pago manual → Confirmado instantáneamente
-- [ ] Crear pago QR → Pendiente → Confirmar manualmente
+- [ ] Crear pago QR → Pendiente → QR generado en `gateway_metadata.qr_code`
+- [ ] QR escaneable → `provider === "mercadopago_instore"` (si está configurado)
+- [ ] QR genérico → `provider === "generic_qr"` (fallback/testing)
+- [ ] Confirmar pago QR manualmente → Status cambia a `confirmed`
 - [ ] Crear pago MP → Pendiente → Webhook confirma
 - [ ] Múltiples pagos parciales → Balance se actualiza correctamente
 - [ ] Pago completo → Venta cambia a `paid`

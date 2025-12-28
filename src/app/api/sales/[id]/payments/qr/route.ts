@@ -194,6 +194,7 @@ export async function POST(
       qr_payload: qrResult.qr_payload,
       provider: qrResult.provider,
       ...(qrResult.expires_at && { expires_at: qrResult.expires_at }),
+      ...(qrResult.reference && { reference: qrResult.reference }),
     };
 
     const { data: payment, error: paymentError } = await supabase
