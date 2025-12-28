@@ -401,6 +401,11 @@ export async function generateInteroperableQR(
     // Formato: https://www.bcra.gob.ar/Noticias/BCRA-otro-paso-pagos-QR.asp
     let qrPayload = "";
     
+    // Obtener Merchant Category Code de configuración (opcional)
+    const merchantCategoryCode = merchantConfig.merchantCategoryCode || 
+                                  process.env.MERCHANT_CATEGORY_CODE || 
+                                  undefined; // Por defecto usa "5492" en buildEMVCoPayload
+    
     if (amount !== null && amount > 0) {
       // QR con monto fijo
       qrPayload = buildEMVCoPayload({
@@ -409,6 +414,7 @@ export async function generateInteroperableQR(
         reference: paymentReference,
         cbu: merchantConfig.cbu,
         merchantName: merchantConfig.name,
+        merchantCategoryCode: merchantCategoryCode,
       });
     } else {
       // QR con monto abierto (el usuario ingresa el monto)
@@ -417,6 +423,7 @@ export async function generateInteroperableQR(
         reference: paymentReference,
         cbu: merchantConfig.cbu,
         merchantName: merchantConfig.name,
+        merchantCategoryCode: merchantCategoryCode,
       });
     }
     
@@ -453,7 +460,7 @@ async function getMerchantConfig(
   tenantId: string,
   providedCBU?: string,
   providedName?: string
-): Promise<{ cbu?: string; name: string }> {
+): Promise<{ cbu?: string; name: string; merchantCategoryCode?: string }> {
   // Si se proporcionan parámetros, usarlos directamente
   if (providedCBU && providedName) {
     return { cbu: providedCBU, name: providedName };
@@ -476,9 +483,10 @@ async function getMerchantConfig(
       
       const cbu = providedCBU || config.merchant_cbu || config.merchant_cvu;
       const name = providedName || config.merchant_name;
+      const mcc = config.merchant_category_code;
       
       if (cbu && name) {
-        return { cbu, name };
+        return { cbu, name, merchantCategoryCode: mcc };
       }
     }
 
@@ -516,6 +524,7 @@ function buildEMVCoPayload(params: {
   reference: string;
   cbu?: string;
   merchantName: string;
+  merchantCategoryCode?: string; // Opcional: código de categoría del comercio (ej: "5492" para Retail)
 }): string {
   // Formato EMVCo simplificado para Argentina
   // Estructura básica: 00 (Payload Format Indicator) + 01 (Point of Initiation) + 26 (Merchant Account Info) + 52 (Merchant Category) + 53 (Currency) + 54 (Amount) + 58 (Country) + 59 (Merchant Name) + 60 (Merchant City) + 62 (Additional Data)
@@ -526,29 +535,55 @@ function buildEMVCoPayload(params: {
   payload += "00" + padLength("01", 2); // "01" = QR Code
   
   // 01: Point of Initiation Method (2 dígitos)
-  // "11" = Static QR, "12" = Dynamic QR
-  payload += "01" + padLength(params.type === "fixed" ? "11" : "12", 2);
+  // "11" = Dynamic QR (monto puede cambiar), "12" = Static QR (monto fijo)
+  // Para QR interoperable, usamos "12" (static) porque el QR contiene toda la información necesaria
+  // Esto es más compatible con todas las billeteras
+  payload += "01" + padLength("12", 2); // Siempre static para interoperable
   
   // 26: Merchant Account Information (hasta 99 caracteres)
   if (params.cbu) {
-    // Formato: 00 (GUI) + 01 (CBU/CVU) + 02 (Reference)
+    // Validar y normalizar CBU/CVU (debe tener exactamente 22 dígitos)
+    const normalizedCBU = params.cbu.replace(/\D/g, ""); // Remover caracteres no numéricos
+    if (normalizedCBU.length !== 22) {
+      throw new Error(`CBU/CVU debe tener exactamente 22 dígitos. Recibido: ${normalizedCBU.length} dígitos`);
+    }
+    
+    // Truncar reference a máximo 25 caracteres si es necesario
+    const normalizedReference = params.reference.substring(0, 25);
+    
+    // Formato EMVCo para Argentina Transferencias 3.0:
+    // 00 (GUI) + 01 (CBU/CVU) + 02 (Reference)
     const accountInfo = 
-      "00" + padLength("AR", 2) + // GUI Argentina
-      "01" + padLength(params.cbu, 22) + // CBU/CVU (22 dígitos)
-      "02" + padLength(params.reference, 25); // Reference (máx 25 caracteres)
+      "00" + padLength("AR", 2) + // GUI Argentina (longitud 2 dígitos)
+      "01" + padLength(normalizedCBU, 2) + // CBU/CVU (longitud 2 dígitos para 22 caracteres)
+      "02" + padLength(normalizedReference, 2); // Reference (longitud 2 dígitos)
+    
+    // Validar que el campo 26 no exceda 99 caracteres
+    if (accountInfo.length > 99) {
+      throw new Error(`Merchant Account Information excede 99 caracteres: ${accountInfo.length}`);
+    }
     
     payload += "26" + padLength(accountInfo, 2);
   }
   
   // 52: Merchant Category Code (4 dígitos)
-  payload += "52" + padLength("0000", 4); // 0000 = General
+  // Usar código válido en lugar de "0000" para mejor compatibilidad
+  // "5492" = Retail (comercio minorista) - código comúnmente aceptado
+  const mcc = params.merchantCategoryCode || "5492";
+  payload += "52" + padLength(mcc, 4);
   
   // 53: Transaction Currency (3 dígitos)
   payload += "53" + padLength("032", 3); // 032 = ARS (Peso Argentino)
   
-  // 54: Transaction Amount (hasta 13 dígitos)
-  if (params.type === "fixed" && params.amount) {
-    const amountStr = params.amount.toFixed(2).replace(".", "");
+  // 54: Transaction Amount (hasta 13 dígitos, sin decimales en formato EMVCo)
+  // Solo incluir si es monto fijo
+  if (params.type === "fixed" && params.amount && params.amount > 0) {
+    // Formato EMVCo: monto sin decimales (ej: 1000.00 -> "100000")
+    const amountStr = Math.round(params.amount * 100).toString();
+    // Validar que no exceda 13 dígitos
+    if (amountStr.length > 13) {
+      throw new Error(`Transaction Amount excede 13 dígitos: ${amountStr.length}`);
+    }
     payload += "54" + padLength(amountStr, 2);
   }
   
