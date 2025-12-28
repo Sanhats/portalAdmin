@@ -34,7 +34,7 @@ export async function GET(
     // Obtener tenant_id del header (opcional, para validación)
     const tenantId = req.headers.get("x-tenant-id");
     
-    // Construir query
+    // Construir query con resumen financiero
     let query = supabase
       .from("sales")
       .select(`
@@ -80,7 +80,25 @@ export async function GET(
       return errorResponse("Venta no encontrada", 404);
     }
     
-    return jsonResponse(data);
+    // Agregar resumen financiero
+    const paidAmount = data.paid_amount ? parseFloat(data.paid_amount) : 0;
+    const balanceAmount = data.balance_amount !== null && data.balance_amount !== undefined 
+      ? parseFloat(data.balance_amount) 
+      : (parseFloat(data.total_amount || "0") - paidAmount);
+    const totalAmount = parseFloat(data.total_amount || "0");
+    
+    const response = {
+      ...data,
+      financial: {
+        totalAmount: totalAmount,
+        paidAmount: paidAmount,
+        balanceAmount: balanceAmount,
+        isPaid: balanceAmount <= 0,
+        paymentCompletedAt: data.payment_completed_at || null,
+      }
+    };
+    
+    return jsonResponse(response);
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/sales/:id");
   }

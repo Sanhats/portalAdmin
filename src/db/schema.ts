@@ -1,4 +1,4 @@
-import { pgTable, text, uuid, timestamp, numeric, boolean, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, timestamp, numeric, boolean, integer, jsonb } from "drizzle-orm/pg-core";
 
 // SPRINT 6: Tabla de stores (tiendas) para multi-tenant
 export const stores = pgTable("stores", {
@@ -81,11 +81,15 @@ export const sales = pgTable("sales", {
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
   status: text("status").notNull().default("draft"), // draft | confirmed | cancelled | paid
   totalAmount: numeric("total_amount").notNull().default("0"),
-  paymentMethod: text("payment_method"), // cash | transfer | mercadopago | other
+  paymentMethod: text("payment_method"), // cash | transfer | mercadopago | other (backward compatibility)
   notes: text("notes"),
   createdBy: uuid("created_by").notNull(), // ID del usuario que creó la venta
   paymentStatus: text("payment_status"), // Preparado para Mercado Pago
   externalReference: text("external_reference"), // Preparado para Mercado Pago (vacío por ahora)
+  // Campos financieros para snapshot
+  paidAmount: numeric("paid_amount").default("0"), // Suma total de pagos confirmados
+  balanceAmount: numeric("balance_amount").default("0"), // total_amount - paid_amount
+  paymentCompletedAt: timestamp("payment_completed_at"), // Fecha cuando se completó el pago
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -99,5 +103,45 @@ export const saleItems = pgTable("sale_items", {
   quantity: integer("quantity").notNull(),
   unitPrice: numeric("unit_price").notNull(),
   subtotal: numeric("subtotal").notNull(),
+});
+
+// Sistema de Métodos de Pago: Métodos configurables por comercio
+export const paymentMethods = pgTable("payment_methods", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  code: text("code").notNull(), // 'cash', 'qr_mp', 'transfer_bbva', etc.
+  label: text("label").notNull(), // "Efectivo", "QR Mercado Pago", etc.
+  type: text("type").notNull(), // 'cash' | 'transfer' | 'qr' | 'card' | 'gateway' | 'other'
+  isActive: boolean("is_active").default(true),
+  metadata: jsonb("metadata"), // JSON para datos adicionales (configuración, credenciales, etc.)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Sistema de Pagos: Pagos de ventas
+export const payments = pgTable("payments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  saleId: uuid("sale_id").references(() => sales.id, { onDelete: "cascade" }).notNull(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  amount: numeric("amount").notNull(),
+  method: text("method"), // cash | transfer | mercadopago | qr | card | gateway | other (backward compatibility)
+  paymentMethodId: uuid("payment_method_id").references(() => paymentMethods.id, { onDelete: "set null" }), // FK a payment_methods
+  status: text("status").notNull().default("pending"), // pending | confirmed | failed | refunded
+  reference: text("reference"), // Nro transferencia, comprobante, etc.
+  createdBy: uuid("created_by").notNull(), // ID del usuario que creó el pago
+  // Preparación para pasarelas (Mercado Pago, etc.)
+  externalReference: text("external_reference"), // ID externo de la pasarela (ej: payment_id de MP)
+  gatewayMetadata: jsonb("gateway_metadata"), // Metadata JSON de la pasarela (webhooks, respuestas, etc.)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Sistema de Auditoría: Eventos de pagos
+export const paymentEvents = pgTable("payment_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "cascade" }).notNull(),
+  action: text("action").notNull(), // 'created' | 'deleted' | 'status_changed'
+  previousState: jsonb("previous_state"), // Estado anterior del pago
+  newState: jsonb("new_state"), // Nuevo estado del pago
+  createdBy: uuid("created_by").notNull(), // ID del usuario que realizó la acción
+  createdAt: timestamp("created_at").defaultNow(),
 });
 

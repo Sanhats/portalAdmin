@@ -10,6 +10,8 @@ const protectedRoutes = [
   "/api/categories",
   "/api/upload",
   "/api/sales",
+  "/api/payments",
+  "/api/payment-methods",
 ];
 
 /**
