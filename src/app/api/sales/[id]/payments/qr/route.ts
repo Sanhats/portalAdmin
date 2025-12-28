@@ -3,6 +3,7 @@ import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-re
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 import { recalculateSaleBalance, logPaymentEvent } from "@/lib/payment-helpers";
 import { generateIdempotencyKey, getInitialPaymentStatus } from "@/lib/payment-helpers-sprint-b";
+import { generateQRPayment } from "@/lib/qr-helpers";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -149,46 +150,51 @@ export async function POST(
     // Verificar idempotencia
     const { data: existingPayment, error: existingError } = await supabase
       .from("payments")
-      .select("id, status, external_reference, gateway_metadata")
+      .select("id, status, amount, external_reference, gateway_metadata")
       .eq("idempotency_key", idempotencyKey)
       .single();
 
     if (existingPayment && !existingError) {
       console.log("[POST /api/sales/:id/payments/qr] Pago existente detectado:", existingPayment.id);
-      // Retornar el pago existente con su QR
-      const qrData = (existingPayment.gateway_metadata as any)?.qr_data;
+      // Retornar el pago existente con su QR en el formato requerido
+      const gatewayMetadata = existingPayment.gateway_metadata as any;
       return jsonResponse({
         id: existingPayment.id,
-        qrCode: qrData?.qr_code || null,
-        qrData: qrData?.qr_data || null,
-        qrType: qrData?.qr_type || "dynamic",
         status: existingPayment.status,
+        amount: parseFloat(existingPayment.amount || "0"),
+        gateway_metadata: gatewayMetadata || null,
       }, 200);
     }
 
-    // SPRINT F: Generar datos del QR
+    // Generar QR usando el helper (intenta Mercado Pago si está configurado, sino genérico)
     const qrType = parsed.data.qrType || "dynamic";
-    let qrCode: string;
-    let qrData: string;
-
-    if (qrType === "static") {
-      // QR estático: usar datos personalizados o datos del método de pago
-      qrData = parsed.data.qrData || `VENTA:${params.id}`;
-      qrCode = generateQRCode(qrData);
-    } else {
-      // QR dinámico: generar QR único con datos del pago
-      qrData = JSON.stringify({
-        sale_id: params.id,
-        amount: balanceAmount,
-        tenant_id: tenantId,
-        timestamp: new Date().toISOString(),
-        payment_id: null, // Se actualizará después de crear el pago
-      });
-      qrCode = generateQRCode(qrData);
+    let qrResult;
+    
+    // Asegurar que tenantId no sea null
+    if (!tenantId) {
+      return errorResponse("tenantId es requerido", 400);
+    }
+    
+    try {
+      qrResult = await generateQRPayment(tenantId, params.id, balanceAmount, qrType);
+    } catch (error: any) {
+      console.error("[POST /api/sales/:id/payments/qr] Error al generar QR:", error);
+      return errorResponse(
+        `Error al generar QR: ${error.message || "Error desconocido"}`,
+        500
+      );
     }
 
-    // SPRINT F: Crear pago con status pending (requiere confirmación manual)
+    // Crear pago con status pending (requiere confirmación manual)
     const paymentStatus = getInitialPaymentStatus("gateway"); // gateway siempre inicia en pending
+
+    // Formato requerido de gateway_metadata según contrato
+    const gatewayMetadata = {
+      qr_code: qrResult.qr_code,
+      qr_payload: qrResult.qr_payload,
+      provider: qrResult.provider,
+      ...(qrResult.expires_at && { expires_at: qrResult.expires_at }),
+    };
 
     const { data: payment, error: paymentError } = await supabase
       .from("payments")
@@ -200,12 +206,7 @@ export async function POST(
         payment_method_id: paymentMethodId,
         status: paymentStatus,
         external_reference: `QR-${params.id}-${Date.now()}`,
-        gateway_metadata: {
-          provider: "generic_qr",
-          qr_type: qrType,
-          qr_code: qrCode,
-          qr_data: qrData,
-        },
+        gateway_metadata: gatewayMetadata,
         idempotency_key: idempotencyKey,
         created_by: user.id,
       })
@@ -215,30 +216,6 @@ export async function POST(
     if (paymentError || !payment) {
       console.error("[POST /api/sales/:id/payments/qr] Error al crear pago:", paymentError);
       return errorResponse("Error al crear el pago", 500, paymentError?.message, paymentError?.code);
-    }
-
-    // Actualizar qr_data con el payment_id
-    if (qrType === "dynamic") {
-      const updatedQrData = JSON.stringify({
-        sale_id: params.id,
-        amount: balanceAmount,
-        tenant_id: tenantId,
-        timestamp: new Date().toISOString(),
-        payment_id: payment.id,
-      });
-      const updatedQrCode = generateQRCode(updatedQrData);
-
-      await supabase
-        .from("payments")
-        .update({
-          gateway_metadata: {
-            provider: "generic_qr",
-            qr_type: qrType,
-            qr_code: updatedQrCode,
-            qr_data: updatedQrData,
-          },
-        })
-        .eq("id", payment.id);
     }
 
     // Registrar evento de auditoría
@@ -259,29 +236,16 @@ export async function POST(
       user.id
     );
 
+    // Retornar pago con gateway_metadata en formato requerido
     return jsonResponse({
       id: payment.id,
-      qrCode: qrType === "dynamic" ? (payment.gateway_metadata as any)?.qr_code : qrCode,
-      qrData: qrType === "dynamic" ? (payment.gateway_metadata as any)?.qr_data : qrData,
-      qrType,
       status: payment.status,
-      amount: balanceAmount,
-      saleId: params.id,
+      amount: parseFloat(payment.amount || "0"),
+      gateway_metadata: gatewayMetadata,
     }, 201);
   } catch (error) {
     return handleUnexpectedError(error, "POST /api/sales/:id/payments/qr");
   }
 }
 
-/**
- * SPRINT F: Genera un código QR en formato texto (simulado)
- * En producción, usarías una librería como 'qrcode' para generar QR reales
- */
-function generateQRCode(data: string): string {
-  // SPRINT F: Simulación de generación de QR
-  // En producción, usar: import QRCode from 'qrcode'; const qr = await QRCode.toDataURL(data);
-  // Por ahora, retornamos un identificador único que representa el QR
-  const hash = Buffer.from(data).toString('base64').substring(0, 20);
-  return `QR-${hash}`;
-}
 

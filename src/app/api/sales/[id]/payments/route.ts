@@ -4,6 +4,7 @@ import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-re
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 import { recalculateSaleBalance, logPaymentEvent } from "@/lib/payment-helpers";
 import { generateIdempotencyKey, getInitialPaymentStatus } from "@/lib/payment-helpers-sprint-b";
+import { generateQRPayment, isQRPaymentMethod } from "@/lib/qr-helpers";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -78,32 +79,40 @@ export async function POST(
     // Validar payment_method_id si se proporciona
     let paymentMethodId = parsed.data.paymentMethodId || null;
     let method = parsed.data.method || null;
+    let paymentMethod: any = null;
     
     // SPRINT B: Obtener información del método de pago y determinar estado inicial
     let paymentCategory: "manual" | "gateway" | "external" = "manual";
+    let isQR = false;
     
     if (paymentMethodId) {
       // Verificar que el método de pago existe y pertenece al tenant
       // SPRINT B: Asegurar que payment_category se seleccione explícitamente
-      const { data: paymentMethod, error: methodError } = await supabase
+      const { data: pmData, error: methodError } = await supabase
         .from("payment_methods")
-        .select("id, tenant_id, code, type, payment_category")
+        .select("id, tenant_id, code, type, payment_category, metadata")
         .eq("id", paymentMethodId)
         .eq("tenant_id", tenantId)
         .eq("is_active", true)
         .single();
       
       // Debug: verificar que payment_category existe
-      if (paymentMethod && !(paymentMethod as any).payment_category) {
-        console.error(`[POST /api/sales/:id/payments] payment_method ${paymentMethodId} no tiene payment_category en la respuesta:`, Object.keys(paymentMethod));
+      if (pmData && !(pmData as any).payment_category) {
+        console.error(`[POST /api/sales/:id/payments] payment_method ${paymentMethodId} no tiene payment_category en la respuesta:`, Object.keys(pmData));
       }
       
-      if (methodError || !paymentMethod) {
+      if (methodError || !pmData) {
         return errorResponse("Método de pago no encontrado o inactivo", 400);
       }
       
+      paymentMethod = pmData;
+      
       // Usar el type del método de pago como method para backward compatibility
       method = paymentMethod.type;
+      
+      // Detectar si es QR
+      isQR = isQRPaymentMethod(paymentMethod);
+      
       // SPRINT B/C: Determinar payment_category basado en el type del método
       // Esto es más confiable que depender del campo payment_category de la DB
       const methodType = paymentMethod.type?.toLowerCase() || "";
@@ -124,12 +133,14 @@ export async function POST(
         }
       }
       
-      console.log(`[POST /api/sales/:id/payments] paymentMethod type=${paymentMethod.type}, methodType=${methodType}, paymentCategory=${paymentCategory}, statusProvidedExplicitly=${statusProvidedExplicitly}`);
+      console.log(`[POST /api/sales/:id/payments] paymentMethod type=${paymentMethod.type}, methodType=${methodType}, paymentCategory=${paymentCategory}, isQR=${isQR}, statusProvidedExplicitly=${statusProvidedExplicitly}`);
     } else if (!method) {
       // Si no se proporciona ninguno, error
       return errorResponse("Debe proporcionar paymentMethodId o method", 400);
     } else {
       // SPRINT B/C: Si solo se proporciona method (backward compatibility), determinar category
+      isQR = method === "qr";
+      
       if (["cash", "transfer"].includes(method)) {
         paymentCategory = "manual";
       } else if (["qr", "card", "gateway"].includes(method)) {
@@ -145,6 +156,28 @@ export async function POST(
     const amount = typeof parsed.data.amount === "number" 
       ? parsed.data.amount 
       : parseFloat(parsed.data.amount);
+    
+    // Si es QR, generar el QR automáticamente
+    let qrMetadata: any = null;
+    if (isQR) {
+      try {
+        console.log(`[POST /api/sales/:id/payments] Detectado pago QR, generando QR...`);
+        const qrResult = await generateQRPayment(tenantId, params.id, amount, "dynamic");
+        qrMetadata = {
+          qr_code: qrResult.qr_code,
+          qr_payload: qrResult.qr_payload,
+          provider: qrResult.provider,
+          ...(qrResult.expires_at && { expires_at: qrResult.expires_at }),
+        };
+        console.log(`[POST /api/sales/:id/payments] QR generado exitosamente con provider: ${qrResult.provider}`);
+      } catch (error: any) {
+        console.error(`[POST /api/sales/:id/payments] Error al generar QR:`, error);
+        return errorResponse(
+          `Error al generar QR: ${error.message || "Error desconocido"}`,
+          500
+        );
+      }
+    }
     
     // SPRINT B: Determinar estado inicial según reglas (backend decide, no frontend)
     // El backend SIEMPRE decide el estado inicial según el tipo de pago
@@ -242,7 +275,8 @@ export async function POST(
       status: finalStatus, // SPRINT B: Estado determinado por el backend según el tipo
       reference: parsed.data.reference || null,
       external_reference: parsed.data.externalReference || null,
-      gateway_metadata: parsed.data.gatewayMetadata || null,
+      // Si es QR, usar el metadata generado; sino usar el proporcionado o null
+      gateway_metadata: isQR ? qrMetadata : (parsed.data.gatewayMetadata || null),
       idempotency_key: idempotencyKey, // SPRINT B: Clave de idempotencia
       created_by: user.id,
     };
