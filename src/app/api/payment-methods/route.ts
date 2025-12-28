@@ -133,6 +133,19 @@ export async function POST(req: Request) {
       return errorResponse(`Ya existe un método de pago con el código '${parsed.data.code}' para este tenant`, 400);
     }
     
+    // SPRINT B/C: Determinar payment_category si no se proporciona
+    let paymentCategory: "manual" | "gateway" | "external" = parsed.data.paymentCategory || "manual";
+    if (!parsed.data.paymentCategory) {
+      // Inferir del type
+      if (["cash", "transfer", "other"].includes(parsed.data.type)) {
+        paymentCategory = "manual";
+      } else if (["qr", "card", "gateway"].includes(parsed.data.type)) {
+        paymentCategory = "gateway";
+      } else if (["mercadopago", "stripe", "paypal"].includes(parsed.data.type)) {
+        paymentCategory = "external";
+      }
+    }
+    
     // Crear método de pago
     const { data: paymentMethod, error: insertError } = await supabase
       .from("payment_methods")
@@ -141,6 +154,7 @@ export async function POST(req: Request) {
         code: parsed.data.code,
         label: parsed.data.label,
         type: parsed.data.type,
+        payment_category: paymentCategory, // SPRINT B
         is_active: parsed.data.isActive ?? true,
         metadata: parsed.data.metadata ? JSON.stringify(parsed.data.metadata) : null,
       })

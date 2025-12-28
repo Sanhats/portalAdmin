@@ -30,7 +30,7 @@ export async function POST(
       return errorResponse("ID inválido", 400, uuidValidation.error.errors);
     }
     
-    // Obtener la venta con sus items
+    // SPRINT A: Obtener la venta con sus items incluyendo stock_impacted
     const { data: sale, error: saleError } = await supabase
       .from("sales")
       .select(`
@@ -41,7 +41,8 @@ export async function POST(
           variant_id,
           quantity,
           unit_price,
-          subtotal
+          subtotal,
+          stock_impacted
         )
       `)
       .eq("id", params.id)
@@ -101,7 +102,7 @@ export async function POST(
         console.warn("[POST /api/sales/:id/cancel] Algunos productos no se encontraron, continuando...");
       }
       
-      // Revertir stock para cada item
+      // SPRINT A: Revertir stock usando stock_impacted del snapshot
       const stockUpdates: Array<{ productId: string; oldStock: number; newStock: number; quantity: number }> = [];
       
       for (const item of sale.sale_items) {
@@ -112,7 +113,8 @@ export async function POST(
         }
         
         const currentStock = product.stock || 0;
-        const quantityToRestore = item.quantity;
+        // SPRINT A: Usar stock_impacted del snapshot si está disponible, sino usar quantity
+        const quantityToRestore = item.stock_impacted > 0 ? item.stock_impacted : item.quantity;
         const newStock = currentStock + quantityToRestore;
         
         stockUpdates.push({

@@ -77,6 +77,10 @@ export async function PUT(
     if (parsed.data.code !== undefined) updateData.code = parsed.data.code;
     if (parsed.data.label !== undefined) updateData.label = parsed.data.label;
     if (parsed.data.type !== undefined) updateData.type = parsed.data.type;
+    // SPRINT B: Actualizar payment_category si se proporciona
+    if (parsed.data.paymentCategory !== undefined) {
+      updateData.payment_category = parsed.data.paymentCategory;
+    }
     if (parsed.data.isActive !== undefined) updateData.is_active = parsed.data.isActive;
     if (parsed.data.metadata !== undefined) {
       updateData.metadata = parsed.data.metadata ? JSON.stringify(parsed.data.metadata) : null;

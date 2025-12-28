@@ -3,6 +3,7 @@ import { createPaymentSchema } from "@/validations/payment";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 import { recalculateSaleBalance, logPaymentEvent } from "@/lib/payment-helpers";
+import { generateIdempotencyKey, getInitialPaymentStatus } from "@/lib/payment-helpers-sprint-b";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -34,6 +35,9 @@ export async function POST(
     
     const body = await req.json();
     console.log("[POST /api/sales/:id/payments] Body recibido:", JSON.stringify(body, null, 2));
+    
+    // SPRINT B: Guardar si status fue proporcionado explícitamente (antes de validar)
+    const statusProvidedExplicitly = body.status !== undefined;
     
     // Validar datos
     const parsed = createPaymentSchema.safeParse(body);
@@ -75,15 +79,24 @@ export async function POST(
     let paymentMethodId = parsed.data.paymentMethodId || null;
     let method = parsed.data.method || null;
     
+    // SPRINT B: Obtener información del método de pago y determinar estado inicial
+    let paymentCategory: "manual" | "gateway" | "external" = "manual";
+    
     if (paymentMethodId) {
       // Verificar que el método de pago existe y pertenece al tenant
+      // SPRINT B: Asegurar que payment_category se seleccione explícitamente
       const { data: paymentMethod, error: methodError } = await supabase
         .from("payment_methods")
-        .select("id, tenant_id, code, type")
+        .select("id, tenant_id, code, type, payment_category")
         .eq("id", paymentMethodId)
         .eq("tenant_id", tenantId)
         .eq("is_active", true)
         .single();
+      
+      // Debug: verificar que payment_category existe
+      if (paymentMethod && !(paymentMethod as any).payment_category) {
+        console.error(`[POST /api/sales/:id/payments] payment_method ${paymentMethodId} no tiene payment_category en la respuesta:`, Object.keys(paymentMethod));
+      }
       
       if (methodError || !paymentMethod) {
         return errorResponse("Método de pago no encontrado o inactivo", 400);
@@ -91,9 +104,41 @@ export async function POST(
       
       // Usar el type del método de pago como method para backward compatibility
       method = paymentMethod.type;
+      // SPRINT B/C: Determinar payment_category basado en el type del método
+      // Esto es más confiable que depender del campo payment_category de la DB
+      const methodType = paymentMethod.type?.toLowerCase() || "";
+      const categoryFromDB = (paymentMethod as any).payment_category;
+      
+      // Si tiene payment_category en la DB y es válido, usarlo
+      if (categoryFromDB === "manual" || categoryFromDB === "gateway" || categoryFromDB === "external") {
+        paymentCategory = categoryFromDB;
+      } else {
+        // Inferir del type si no tiene payment_category
+        if (["cash", "transfer", "other"].includes(methodType)) {
+          paymentCategory = "manual";
+        } else if (["qr", "card", "gateway"].includes(methodType)) {
+          paymentCategory = "gateway";
+        } else {
+          // Default a manual si no se puede determinar
+          paymentCategory = "manual";
+        }
+      }
+      
+      console.log(`[POST /api/sales/:id/payments] paymentMethod type=${paymentMethod.type}, methodType=${methodType}, paymentCategory=${paymentCategory}, statusProvidedExplicitly=${statusProvidedExplicitly}`);
     } else if (!method) {
       // Si no se proporciona ninguno, error
       return errorResponse("Debe proporcionar paymentMethodId o method", 400);
+    } else {
+      // SPRINT B/C: Si solo se proporciona method (backward compatibility), determinar category
+      if (["cash", "transfer"].includes(method)) {
+        paymentCategory = "manual";
+      } else if (["qr", "card", "gateway"].includes(method)) {
+        paymentCategory = "gateway";
+      } else if (["mercadopago", "stripe", "paypal"].includes(method)) {
+        paymentCategory = "external";
+      } else {
+        paymentCategory = "manual"; // Default
+      }
     }
     
     // Preparar datos del pago
@@ -101,7 +146,75 @@ export async function POST(
       ? parsed.data.amount 
       : parseFloat(parsed.data.amount);
     
-    const paymentStatus = parsed.data.status || "pending";
+    // SPRINT B: Determinar estado inicial según reglas (backend decide, no frontend)
+    // El backend SIEMPRE decide el estado inicial según el tipo de pago
+    // Solo respetamos el status proporcionado si es compatible con las reglas
+    let paymentStatus: "pending" | "confirmed" | "failed" | "refunded";
+    
+    // Calcular el estado inicial según el tipo
+    const calculatedInitialStatus = getInitialPaymentStatus(paymentCategory);
+    
+    // Si se proporciona status explícitamente, validar compatibilidad
+    if (statusProvidedExplicitly && body.status && body.status !== calculatedInitialStatus) {
+      // Si el status proporcionado difiere del calculado, validar compatibilidad
+      if (body.status === "confirmed" && paymentCategory === "gateway") {
+        // Gateway no puede iniciar en confirmed
+        return errorResponse("Los pagos de gateway siempre inician en estado 'pending'. No se puede crear directamente como 'confirmed'", 400);
+      }
+      // Si es compatible, usar el proporcionado (solo para casos especiales como "failed", "processing")
+      if (["pending", "processing", "confirmed", "failed", "refunded"].includes(body.status)) {
+        paymentStatus = body.status;
+      } else {
+        paymentStatus = calculatedInitialStatus;
+      }
+    } else {
+      // SPRINT B: El backend decide el estado inicial según el tipo
+      paymentStatus = calculatedInitialStatus;
+    }
+    
+    console.log(`[POST /api/sales/:id/payments] Estado final ANTES de insert: paymentStatus=${paymentStatus}, paymentCategory=${paymentCategory}, calculatedInitialStatus=${calculatedInitialStatus}, statusProvidedExplicitly=${statusProvidedExplicitly}, body.status=${body.status}`);
+    
+    // SPRINT B: Generar idempotency_key para evitar duplicados
+    // Incluir payment_method_id para diferenciar métodos con el mismo type
+    const idempotencyKey = generateIdempotencyKey(
+      params.id,
+      amount,
+      method,
+      parsed.data.externalReference || null,
+      paymentMethodId || null
+    );
+    
+    // SPRINT B: Verificar si ya existe un pago con la misma idempotency_key
+    const { data: existingPayment, error: checkDuplicateError } = await supabase
+      .from("payments")
+      .select("id, status")
+      .eq("idempotency_key", idempotencyKey)
+      .single();
+    
+    if (existingPayment && !checkDuplicateError) {
+      // Ya existe un pago con la misma clave de idempotencia
+      console.log(`[POST /api/sales/:id/payments] Pago duplicado detectado (idempotency_key: ${idempotencyKey}), retornando pago existente`);
+      // Retornar el pago existente
+      const { data: existingPaymentFull, error: fetchExistingError } = await supabase
+        .from("payments")
+        .select(`
+          *,
+          payment_methods:payment_method_id (
+            id,
+            code,
+            label,
+            type,
+            payment_category,
+            is_active
+          )
+        `)
+        .eq("id", existingPayment.id)
+        .single();
+      
+      if (!fetchExistingError && existingPaymentFull) {
+        return jsonResponse(existingPaymentFull, 200); // 200 porque ya existe
+      }
+    }
     
     // Estado anterior (null porque es creación)
     const previousState = null;
@@ -115,27 +228,75 @@ export async function POST(
       gateway_metadata: parsed.data.gatewayMetadata || null,
     };
     
-    // Crear el pago
+    // SPRINT B/C: Crear el pago con idempotency_key
+    // Asegurar que paymentStatus tenga un valor válido
+    const finalStatus: "pending" | "processing" | "confirmed" | "failed" | "refunded" = paymentStatus || getInitialPaymentStatus(paymentCategory);
+    
+    // Paso 1: Log real del insert
+    const insertPayload: any = {
+      sale_id: params.id,
+      tenant_id: tenantId,
+      amount: amount.toString(),
+      method: method, // Backward compatibility
+      payment_method_id: paymentMethodId,
+      status: finalStatus, // SPRINT B: Estado determinado por el backend según el tipo
+      reference: parsed.data.reference || null,
+      external_reference: parsed.data.externalReference || null,
+      gateway_metadata: parsed.data.gatewayMetadata || null,
+      idempotency_key: idempotencyKey, // SPRINT B: Clave de idempotencia
+      created_by: user.id,
+    };
+
+    // SPRINT F: Agregar campos de evidencia de pago si se proporcionan
+    if (parsed.data.proofType) {
+      insertPayload.proof_type = parsed.data.proofType;
+    }
+    if (parsed.data.proofReference !== undefined) {
+      insertPayload.proof_reference = parsed.data.proofReference;
+    }
+    if (parsed.data.proofFileUrl) {
+      insertPayload.proof_file_url = parsed.data.proofFileUrl;
+    }
+    if (parsed.data.terminalId) {
+      insertPayload.terminal_id = parsed.data.terminalId;
+    }
+    if (parsed.data.cashRegisterId) {
+      insertPayload.cash_register_id = parsed.data.cashRegisterId;
+    }
+    
+    console.log("[POST /api/sales/:id/payments] Paso 1 - Creating payment:", {
+      methodType: method,
+      paymentCategory,
+      statusToInsert: finalStatus,
+      saleId: params.id,
+      amount: amount.toString(),
+      insertPayload: JSON.stringify(insertPayload, null, 2)
+    });
+    
+    // Paso 2: Log del response de Supabase
     const { data: payment, error: paymentError } = await supabase
       .from("payments")
-      .insert({
-        sale_id: params.id,
-        tenant_id: tenantId,
-        amount: amount.toString(),
-        method: method, // Backward compatibility
-        payment_method_id: paymentMethodId,
-        status: paymentStatus,
-        reference: parsed.data.reference || null,
-        external_reference: parsed.data.externalReference || null,
-        gateway_metadata: parsed.data.gatewayMetadata || null,
-        created_by: user.id,
-      })
+      .insert(insertPayload)
       .select()
       .single();
     
     if (paymentError || !payment) {
       console.error("[POST /api/sales/:id/payments] Error al crear pago:", paymentError);
       return errorResponse("Error al crear el pago", 500, paymentError?.message, paymentError?.code);
+    }
+    
+    console.log("[POST /api/sales/:id/payments] Paso 2 - Supabase response:", {
+      insertedStatus: payment.status,
+      expectedStatus: finalStatus,
+      match: payment.status === finalStatus,
+      paymentId: payment.id,
+      paymentCategory,
+      methodType: method
+    });
+    
+    // Si el status insertado no coincide con el esperado, es un problema crítico
+    if (payment.status !== finalStatus) {
+      console.error(`[POST /api/sales/:id/payments] ⚠️ CRÍTICO: Status insertado (${payment.status}) no coincide con esperado (${finalStatus}). paymentCategory=${paymentCategory}, methodType=${method}`);
     }
     
     // Registrar evento de auditoría

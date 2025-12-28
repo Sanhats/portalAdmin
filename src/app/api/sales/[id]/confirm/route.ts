@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
+import { isConfirmableStatus } from "@/lib/sale-constants";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -55,18 +56,23 @@ export async function POST(
       return errorResponse("Error al obtener la venta", 500, saleError?.message, saleError?.code);
     }
     
-    // Validar que la venta esté en estado draft
-    if (sale.status !== "draft") {
-      return errorResponse(`No se puede confirmar una venta en estado ${sale.status}. Solo se pueden confirmar ventas en estado draft`, 400);
+    // SPRINT A: Validar que el estado permita confirmación
+    if (!isConfirmableStatus(sale.status as any)) {
+      console.error(`[POST /api/sales/:id/confirm] Estado no confirmable: ${sale.status}`);
+      return errorResponse(`No se puede confirmar una venta en estado ${sale.status}. Solo se pueden confirmar ventas en estado draft o in_progress`, 400);
     }
     
     // Validar que tenga items
     if (!sale.sale_items || sale.sale_items.length === 0) {
+      console.error(`[POST /api/sales/:id/confirm] Venta ${params.id} no tiene items`);
       return errorResponse("La venta no tiene items", 400);
     }
     
+    console.log(`[POST /api/sales/:id/confirm] Venta ${params.id} tiene ${sale.sale_items.length} items`);
+    
     // Obtener todos los productos de la venta
     const productIds = sale.sale_items.map((item: any) => item.product_id);
+    console.log(`[POST /api/sales/:id/confirm] Obteniendo productos: ${productIds.join(', ')}`);
     const { data: products, error: productsError } = await supabase
       .from("products")
       .select("id, stock, is_active, sku, name_internal")
@@ -79,14 +85,18 @@ export async function POST(
     }
     
     if (!products || products.length !== productIds.length) {
+      console.error(`[POST /api/sales/:id/confirm] Productos no encontrados. Esperados: ${productIds.length}, Encontrados: ${products?.length || 0}`);
       return errorResponse("Uno o más productos no existen o fueron eliminados", 400);
     }
     
     // Validar que todos los productos estén activos
     const inactiveProducts = products.filter(p => !p.is_active);
     if (inactiveProducts.length > 0) {
+      console.error(`[POST /api/sales/:id/confirm] Productos inactivos: ${inactiveProducts.map(p => p.sku || p.id).join(', ')}`);
       return errorResponse("Uno o más productos están inactivos", 400);
     }
+    
+    console.log(`[POST /api/sales/:id/confirm] Productos validados. Stock de productos:`, products.map(p => ({ id: p.id, stock: p.stock, sku: p.sku })));
     
     // Validar stock disponible para cada item
     const stockIssues: string[] = [];
@@ -114,15 +124,18 @@ export async function POST(
     }
     
     if (stockIssues.length > 0) {
+      console.error(`[POST /api/sales/:id/confirm] Stock insuficiente para venta ${params.id}:`, stockIssues);
       return errorResponse("Stock insuficiente", 400, {
         issues: stockIssues,
         message: "No hay stock suficiente para confirmar la venta",
       });
     }
     
-    // Actualizar stock y registrar movimientos (transacción simulada con múltiples updates)
+    // SPRINT A: Actualizar stock, registrar movimientos y guardar stock_impacted
     // Nota: Supabase no tiene transacciones reales, pero podemos hacerlo de forma segura
     // verificando stock antes de cada actualización
+    
+    const stockImpactedUpdates: Array<{ itemId: string; stockImpacted: number }> = [];
     
     for (const update of stockUpdates) {
       // Actualizar stock del producto
@@ -154,6 +167,23 @@ export async function POST(
         // No fallar si no se puede registrar el movimiento, solo loguear
         console.warn(`[POST /api/sales/:id/confirm] No se pudo registrar movimiento de stock para producto ${update.productId}:`, movementError);
       }
+      
+      // SPRINT A: Guardar stock_impacted en sale_items
+      const item = sale.sale_items.find((si: any) => si.product_id === update.productId);
+      if (item) {
+        stockImpactedUpdates.push({
+          itemId: item.id,
+          stockImpacted: update.quantity,
+        });
+      }
+    }
+    
+    // SPRINT A: Actualizar stock_impacted en todos los items
+    for (const update of stockImpactedUpdates) {
+      await supabase
+        .from("sale_items")
+        .update({ stock_impacted: update.stockImpacted })
+        .eq("id", update.itemId);
     }
     
     // Actualizar estado de la venta a "confirmed"
@@ -171,7 +201,7 @@ export async function POST(
       return errorResponse("Error al confirmar la venta", 500, updateSaleError?.message, updateSaleError?.code);
     }
     
-    // Obtener la venta completa con items
+    // SPRINT A: Obtener la venta completa con items y snapshot (incluyendo stock_impacted)
     const { data: saleWithItems, error: fetchError } = await supabase
       .from("sales")
       .select(`
@@ -183,6 +213,14 @@ export async function POST(
           quantity,
           unit_price,
           subtotal,
+          product_name,
+          product_sku,
+          variant_name,
+          variant_value,
+          unit_cost,
+          unit_tax,
+          unit_discount,
+          stock_impacted,
           products:product_id (
             id,
             sku,

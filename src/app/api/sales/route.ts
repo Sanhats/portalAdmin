@@ -2,6 +2,8 @@ import { supabase } from "@/lib/supabase";
 import { createSaleSchema } from "@/validations/sale";
 import { jsonResponse, errorResponse, handleUnexpectedError, validatePagination } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
+import { calculateSaleTotals, prepareSaleItems } from "@/lib/sale-helpers";
+import { SALE_STATUSES } from "@/lib/sale-constants";
 import { z } from "zod";
 
 // GET /api/sales - Listar ventas con filtros y paginación
@@ -168,7 +170,7 @@ export async function POST(req: Request) {
       return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
     
-    const { items, paymentMethod, notes } = parsed.data;
+    const { items, paymentMethod, notes, status, subtotal, taxes, discounts } = parsed.data;
     
     // Validar que todos los productos existan y estén activos
     const productIds = items.map(item => item.productId);
@@ -225,43 +227,37 @@ export async function POST(req: Request) {
       }
     }
     
-    // Calcular total y validar precios
-    let totalAmount = 0;
-    const saleItemsToInsert: any[] = [];
-    
-    for (const item of items) {
-      const product = products.find(p => p.id === item.productId);
-      if (!product) continue;
-      
-      // Usar el precio del item o el precio del producto
-      const unitPrice = typeof item.unitPrice === "number" 
-        ? item.unitPrice 
-        : parseFloat(item.unitPrice);
-      
-      const subtotal = unitPrice * item.quantity;
-      totalAmount += subtotal;
-      
-      saleItemsToInsert.push({
-        product_id: item.productId,
-        variant_id: item.variantId || null,
-        quantity: item.quantity,
-        unit_price: unitPrice.toString(),
-        subtotal: subtotal.toString(),
-      });
+    // SPRINT A: Preparar items con snapshot y calcular totales
+    let preparedItems;
+    try {
+      preparedItems = await prepareSaleItems(items);
+    } catch (snapshotError: any) {
+      console.error("[POST /api/sales] Error al obtener snapshot:", snapshotError);
+      return errorResponse("Error al obtener información de productos", 500, snapshotError.message);
     }
     
-    // Crear la venta en estado draft (NO descontar stock aún)
+    // SPRINT A: Calcular totales
+    const totals = await calculateSaleTotals(items, subtotal, taxes, discounts);
+    
+    // Crear la venta con totales persistidos
+    const saleStatus = status || SALE_STATUSES.DRAFT;
     const { data: sale, error: saleError } = await supabase
       .from("sales")
       .insert({
         tenant_id: tenantId,
-        status: "draft",
-        total_amount: totalAmount.toString(),
+        status: saleStatus,
+        subtotal: totals.subtotal.toString(),
+        taxes: totals.taxes.toString(),
+        discounts: totals.discounts.toString(),
+        total_amount: totals.totalAmount.toString(),
+        cost_amount: totals.costAmount.toString(),
         payment_method: paymentMethod || null,
         notes: notes || null,
         created_by: user.id,
         payment_status: null,
         external_reference: null,
+        paid_amount: "0",
+        balance_amount: totals.totalAmount.toString(),
       })
       .select()
       .single();
@@ -271,10 +267,22 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear la venta", 500, saleError?.message, saleError?.code);
     }
     
-    // Crear los items de la venta
-    const saleItemsWithSaleId = saleItemsToInsert.map(item => ({
-      ...item,
+    // SPRINT A: Crear los items de la venta con snapshot
+    const saleItemsWithSaleId = preparedItems.map(item => ({
       sale_id: sale.id,
+      product_id: item.productId,
+      variant_id: item.variantId || null,
+      quantity: item.quantity,
+      product_name: item.productName,
+      product_sku: item.productSku,
+      variant_name: item.variantName || null,
+      variant_value: item.variantValue || null,
+      unit_price: (typeof item.unitPrice === "string" ? item.unitPrice : item.unitPrice.toString()),
+      unit_cost: item.unitCost ? (typeof item.unitCost === "string" ? item.unitCost : item.unitCost.toString()) : null,
+      unit_tax: item.unitTax || "0",
+      unit_discount: item.unitDiscount || "0",
+      subtotal: item.subtotal.toString(),
+      stock_impacted: item.stockImpacted,
     }));
     
     const { error: itemsError } = await supabase
@@ -288,7 +296,7 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear los items de la venta", 500, itemsError.message, itemsError.code);
     }
     
-    // Obtener la venta completa con items
+    // SPRINT A: Obtener la venta completa con items y snapshot
     const { data: saleWithItems, error: fetchError } = await supabase
       .from("sales")
       .select(`
@@ -300,6 +308,14 @@ export async function POST(req: Request) {
           quantity,
           unit_price,
           subtotal,
+          product_name,
+          product_sku,
+          variant_name,
+          variant_value,
+          unit_cost,
+          unit_tax,
+          unit_discount,
+          stock_impacted,
           products:product_id (
             id,
             sku,

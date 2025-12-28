@@ -2,6 +2,8 @@ import { supabase } from "@/lib/supabase";
 import { updateSaleSchema } from "@/validations/sale";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
+import { calculateSaleTotals, prepareSaleItems } from "@/lib/sale-helpers";
+import { isEditableStatus } from "@/lib/sale-constants";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -34,7 +36,7 @@ export async function GET(
     // Obtener tenant_id del header (opcional, para validación)
     const tenantId = req.headers.get("x-tenant-id");
     
-    // Construir query con resumen financiero
+    // SPRINT A: Construir query con resumen financiero y snapshot
     let query = supabase
       .from("sales")
       .select(`
@@ -46,6 +48,14 @@ export async function GET(
           quantity,
           unit_price,
           subtotal,
+          product_name,
+          product_sku,
+          variant_name,
+          variant_value,
+          unit_cost,
+          unit_tax,
+          unit_discount,
+          stock_impacted,
           products:product_id (
             id,
             sku,
@@ -80,21 +90,31 @@ export async function GET(
       return errorResponse("Venta no encontrada", 404);
     }
     
-    // Agregar resumen financiero
+    // SPRINT A: Agregar resumen financiero completo
     const paidAmount = data.paid_amount ? parseFloat(data.paid_amount) : 0;
     const balanceAmount = data.balance_amount !== null && data.balance_amount !== undefined 
       ? parseFloat(data.balance_amount) 
       : (parseFloat(data.total_amount || "0") - paidAmount);
     const totalAmount = parseFloat(data.total_amount || "0");
+    const subtotal = data.subtotal ? parseFloat(data.subtotal) : totalAmount;
+    const taxes = data.taxes ? parseFloat(data.taxes) : 0;
+    const discounts = data.discounts ? parseFloat(data.discounts) : 0;
+    const costAmount = data.cost_amount ? parseFloat(data.cost_amount) : 0;
     
     const response = {
       ...data,
       financial: {
+        subtotal: subtotal,
+        taxes: taxes,
+        discounts: discounts,
         totalAmount: totalAmount,
+        costAmount: costAmount,
         paidAmount: paidAmount,
         balanceAmount: balanceAmount,
         isPaid: balanceAmount <= 0,
         paymentCompletedAt: data.payment_completed_at || null,
+        margin: totalAmount - costAmount, // Margen calculado
+        marginPercentage: totalAmount > 0 ? ((totalAmount - costAmount) / totalAmount * 100) : 0,
       }
     };
     
@@ -143,7 +163,7 @@ export async function PUT(
     // Verificar que la venta existe y está en estado draft
     const { data: existingSale, error: checkError } = await supabase
       .from("sales")
-      .select("id, status, tenant_id")
+      .select("id, status, tenant_id, paid_amount, balance_amount")
       .eq("id", params.id)
       .single();
     
@@ -151,14 +171,15 @@ export async function PUT(
       return errorResponse("Venta no encontrada", 404);
     }
     
-    if (existingSale.status !== "draft") {
-      return errorResponse("Solo se pueden editar ventas en estado draft", 400);
+    // SPRINT A: Validar que el estado permita edición
+    if (!isEditableStatus(existingSale.status as any)) {
+      return errorResponse(`Solo se pueden editar ventas en estado draft. Estado actual: ${existingSale.status}`, 400);
     }
     
     // Obtener tenant_id del header si no está en la venta
     const tenantId = req.headers.get("x-tenant-id") || existingSale.tenant_id;
     
-    // Si se están actualizando los items, recalcular total y validar
+    // SPRINT A: Preparar datos de actualización
     let updateData: any = {
       payment_method: parsed.data.paymentMethod !== undefined ? parsed.data.paymentMethod : undefined,
       notes: parsed.data.notes !== undefined ? parsed.data.notes : undefined,
@@ -167,7 +188,7 @@ export async function PUT(
     // Remover campos undefined
     Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
     
-    // Si se actualizan los items, validar y recalcular
+    // Si se actualizan los items, validar y recalcular con snapshot
     if (parsed.data.items) {
       const items = parsed.data.items;
       
@@ -215,31 +236,29 @@ export async function PUT(
         }
       }
       
-      // Calcular nuevo total
-      let totalAmount = 0;
-      const saleItemsToInsert: any[] = [];
-      
-      for (const item of items) {
-        const unitPrice = typeof item.unitPrice === "number" 
-          ? item.unitPrice 
-          : parseFloat(item.unitPrice);
-        
-        const subtotal = unitPrice * item.quantity;
-        totalAmount += subtotal;
-        
-        saleItemsToInsert.push({
-          product_id: item.productId,
-          variant_id: item.variantId || null,
-          quantity: item.quantity,
-          unit_price: unitPrice.toString(),
-          subtotal: subtotal.toString(),
-        });
+      // SPRINT A: Preparar items con snapshot y calcular totales
+      let preparedItems;
+      try {
+        preparedItems = await prepareSaleItems(items);
+      } catch (snapshotError: any) {
+        console.error("[PUT /api/sales/:id] Error al obtener snapshot:", snapshotError);
+        return errorResponse("Error al obtener información de productos", 500, snapshotError.message);
       }
       
-      updateData.total_amount = totalAmount.toString();
+      // SPRINT A: Calcular totales
+      const totals = await calculateSaleTotals(items);
       
-      // Eliminar items antiguos y crear nuevos (en una transacción)
-      // Primero eliminar items antiguos
+      // Actualizar totales en la venta
+      updateData.subtotal = totals.subtotal.toString();
+      updateData.taxes = totals.taxes.toString();
+      updateData.discounts = totals.discounts.toString();
+      updateData.total_amount = totals.totalAmount.toString();
+      updateData.cost_amount = totals.costAmount.toString();
+      // Recalcular balance_amount si ya hay pagos
+      const currentPaidAmount = existingSale.paid_amount ? parseFloat(existingSale.paid_amount) : 0;
+      updateData.balance_amount = (totals.totalAmount - currentPaidAmount).toString();
+      
+      // Eliminar items antiguos
       const { error: deleteItemsError } = await supabase
         .from("sale_items")
         .delete()
@@ -250,10 +269,22 @@ export async function PUT(
         return errorResponse("Error al actualizar los items de la venta", 500, deleteItemsError.message);
       }
       
-      // Crear nuevos items
-      const saleItemsWithSaleId = saleItemsToInsert.map(item => ({
-        ...item,
+      // SPRINT A: Crear nuevos items con snapshot
+      const saleItemsWithSaleId = preparedItems.map(item => ({
         sale_id: params.id,
+        product_id: item.productId,
+        variant_id: item.variantId || null,
+        quantity: item.quantity,
+        product_name: item.productName,
+        product_sku: item.productSku,
+        variant_name: item.variantName || null,
+        variant_value: item.variantValue || null,
+        unit_price: (typeof item.unitPrice === "string" ? item.unitPrice : item.unitPrice.toString()),
+        unit_cost: item.unitCost ? (typeof item.unitCost === "string" ? item.unitCost : item.unitCost.toString()) : null,
+        unit_tax: item.unitTax || "0",
+        unit_discount: item.unitDiscount || "0",
+        subtotal: item.subtotal.toString(),
+        stock_impacted: 0, // Se actualizará cuando se confirme
       }));
       
       const { error: insertItemsError } = await supabase
@@ -279,7 +310,7 @@ export async function PUT(
       return errorResponse("Error al actualizar la venta", 500, updateError?.message, updateError?.code);
     }
     
-    // Obtener la venta completa con items
+    // SPRINT A: Obtener la venta completa con items y snapshot
     const { data: saleWithItems, error: fetchError } = await supabase
       .from("sales")
       .select(`
@@ -291,6 +322,14 @@ export async function PUT(
           quantity,
           unit_price,
           subtotal,
+          product_name,
+          product_sku,
+          variant_name,
+          variant_value,
+          unit_cost,
+          unit_tax,
+          unit_discount,
+          stock_impacted,
           products:product_id (
             id,
             sku,

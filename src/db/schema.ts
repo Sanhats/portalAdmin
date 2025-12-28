@@ -79,8 +79,14 @@ export const stockMovements = pgTable("stock_movements", {
 export const sales = pgTable("sales", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
-  status: text("status").notNull().default("draft"), // draft | confirmed | cancelled | paid
-  totalAmount: numeric("total_amount").notNull().default("0"),
+  // SPRINT A: Estados extendidos: draft | in_progress | confirmed | completed | cancelled | paid | refunded
+  status: text("status").notNull().default("draft"), 
+  // SPRINT A: Totales persistidos
+  subtotal: numeric("subtotal").default("0"), // Subtotal sin impuestos ni descuentos
+  taxes: numeric("taxes").default("0"), // Total de impuestos
+  discounts: numeric("discounts").default("0"), // Total de descuentos
+  totalAmount: numeric("total_amount").notNull().default("0"), // Total final (subtotal + taxes - discounts)
+  costAmount: numeric("cost_amount").default("0"), // Costo total para cálculo de margen
   paymentMethod: text("payment_method"), // cash | transfer | mercadopago | other (backward compatibility)
   notes: text("notes"),
   createdBy: uuid("created_by").notNull(), // ID del usuario que creó la venta
@@ -101,8 +107,17 @@ export const saleItems = pgTable("sale_items", {
   productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
   variantId: uuid("variant_id").references(() => variants.id, { onDelete: "set null" }), // Nullable
   quantity: integer("quantity").notNull(),
-  unitPrice: numeric("unit_price").notNull(),
-  subtotal: numeric("subtotal").notNull(),
+  // SPRINT A: Snapshot de producto al momento de la venta (inmutable)
+  productName: text("product_name"), // Nombre del producto al momento de la venta
+  productSku: text("product_sku"), // SKU del producto al momento de la venta
+  variantName: text("variant_name"), // Nombre de la variante si aplica
+  variantValue: text("variant_value"), // Valor de la variante si aplica
+  unitPrice: numeric("unit_price").notNull(), // Precio unitario al momento de la venta
+  unitCost: numeric("unit_cost"), // Costo unitario al momento de la venta (para margen)
+  unitTax: numeric("unit_tax").default("0"), // Impuesto unitario
+  unitDiscount: numeric("unit_discount").default("0"), // Descuento unitario
+  subtotal: numeric("subtotal").notNull(), // Subtotal del item (quantity * unitPrice)
+  stockImpacted: integer("stock_impacted").notNull().default(0), // Cantidad de stock que se descontó
 });
 
 // Sistema de Métodos de Pago: Métodos configurables por comercio
@@ -112,9 +127,40 @@ export const paymentMethods = pgTable("payment_methods", {
   code: text("code").notNull(), // 'cash', 'qr_mp', 'transfer_bbva', etc.
   label: text("label").notNull(), // "Efectivo", "QR Mercado Pago", etc.
   type: text("type").notNull(), // 'cash' | 'transfer' | 'qr' | 'card' | 'gateway' | 'other'
+  // SPRINT B/C: Clasificación manual vs gateway vs external
+  paymentCategory: text("payment_category").notNull().default("manual"), // 'manual' | 'gateway' | 'external'
   isActive: boolean("is_active").default(true),
   metadata: jsonb("metadata"), // JSON para datos adicionales (configuración, credenciales, etc.)
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT C: Gateways de pago configurados por tenant
+export const paymentGateways = pgTable("payment_gateways", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  provider: text("provider").notNull(), // 'mercadopago' | 'qr' | 'pos' | 'stripe' | etc.
+  enabled: boolean("enabled").default(false), // Si el gateway está habilitado
+  credentials: jsonb("credentials"), // Credenciales encriptadas (access_token, public_key, etc.)
+  config: jsonb("config"), // Configuración adicional (webhook_url, auto_return, etc.)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT B: Intenciones de pago para gateways externos
+export const paymentIntents = pgTable("payment_intents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  saleId: uuid("sale_id").references(() => sales.id, { onDelete: "cascade" }).notNull(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  amount: numeric("amount").notNull(),
+  gateway: text("gateway").notNull(), // 'mercadopago', 'stripe', 'generic_qr', etc.
+  status: text("status").notNull().default("created"), // 'created' | 'processing' | 'completed' | 'failed'
+  expiresAt: timestamp("expires_at"), // Fecha de expiración de la intención
+  externalReference: text("external_reference"), // ID externo de la pasarela
+  gatewayMetadata: jsonb("gateway_metadata"), // Metadata de la pasarela
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }), // FK al pago creado (si aplica)
+  createdBy: uuid("created_by").notNull(), // ID del usuario que creó la intención
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // Sistema de Pagos: Pagos de ventas
@@ -125,12 +171,22 @@ export const payments = pgTable("payments", {
   amount: numeric("amount").notNull(),
   method: text("method"), // cash | transfer | mercadopago | qr | card | gateway | other (backward compatibility)
   paymentMethodId: uuid("payment_method_id").references(() => paymentMethods.id, { onDelete: "set null" }), // FK a payment_methods
-  status: text("status").notNull().default("pending"), // pending | confirmed | failed | refunded
+  // SPRINT B/C: NO debe tener default. El backend decide el estado inicial según el tipo de pago
+  status: text("status").notNull(), // pending | processing | confirmed | failed | refunded
   reference: text("reference"), // Nro transferencia, comprobante, etc.
   createdBy: uuid("created_by").notNull(), // ID del usuario que creó el pago
   // Preparación para pasarelas (Mercado Pago, etc.)
   externalReference: text("external_reference"), // ID externo de la pasarela (ej: payment_id de MP)
   gatewayMetadata: jsonb("gateway_metadata"), // Metadata JSON de la pasarela (webhooks, respuestas, etc.)
+  // SPRINT B: Idempotencia - Hash único para evitar duplicados por retries
+  idempotencyKey: text("idempotency_key"), // Hash único basado en sale_id, amount, method, external_reference
+  // SPRINT F: Campos de evidencia de pago (para QR/POS)
+  proofType: text("proof_type"), // qr_code | receipt | transfer_screenshot | pos_ticket | other
+  proofReference: text("proof_reference"), // Número de transacción, código QR, etc.
+  proofFileUrl: text("proof_file_url"), // URL del archivo de evidencia
+  // SPRINT F: Campos para POS (opcional)
+  terminalId: text("terminal_id"), // ID del terminal POS
+  cashRegisterId: text("cash_register_id"), // ID de la caja/turno
   createdAt: timestamp("created_at").defaultNow(),
 });
 
