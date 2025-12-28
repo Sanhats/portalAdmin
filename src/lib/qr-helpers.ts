@@ -5,6 +5,7 @@
 
 import { supabase } from "@/lib/supabase";
 import { GatewayFactory } from "@/lib/gateway-interface";
+import { crc16ccitt } from "crc";
 
 export interface QRGenerationResult {
   qr_code: string; // URL o base64 del QR
@@ -620,32 +621,32 @@ function buildEMVCoPayload(params: {
   payload += "62" + padLength(additionalData, 2);
   
   // 63: CRC (Cyclic Redundancy Check) - 4 dígitos hexadecimales
-  // Simplificado: usar hash simple para testing
-  const crc = calculateSimpleCRC(payload);
-  payload += "63" + padLength(crc, 2); // Longitud siempre 2 dígitos en EMVCo
+  // Algoritmo CRC16-CCITT según especificación EMVCo
+  // El CRC se calcula sobre el payload completo + campo 63 con longitud (sin el valor del CRC)
+  const payloadSinCRC = payload; // Payload sin campo 63
+  const dataParaCRC = payloadSinCRC + "6304"; // Agregar campo 63 con longitud 04
+  
+  // Usar librería 'crc' para calcular CRC16-CCITT correctamente
+  // EMVCo usa CRC16-CCITT con inicialización 0xFFFF (no XModem que usa 0x0000)
+  // crc16ccitt es la variante correcta para EMVCo QR codes
+  const crc = crc16ccitt(dataParaCRC);
+  const crcHex = crc.toString(16).toUpperCase().padStart(4, "0"); // 4 dígitos hexadecimales en mayúsculas
+  
+  // Debug logging (remover en producción)
+  if (process.env.NODE_ENV === "development") {
+    console.log(`[buildEMVCoPayload] CRC - Data para CRC (completo): "${dataParaCRC}"`);
+    console.log(`[buildEMVCoPayload] CRC - Longitud del payload: ${dataParaCRC.length} caracteres`);
+    console.log(`[buildEMVCoPayload] CRC - CRC calculado: "${crcHex}"`);
+  }
+  
+  payload += "63" + padLength(crcHex, 2); // Campo 63 con longitud 2 dígitos (04) + CRC
   
   return payload;
 }
 
-/**
- * Calcula CRC simplificado para EMVCo (para testing)
- * En producción, usar algoritmo CRC16-CCITT estándar
- */
-function calculateSimpleCRC(data: string): string {
-  // Implementación simplificada - en producción usar librería CRC16-CCITT
-  let crc = 0xFFFF;
-  for (let i = 0; i < data.length; i++) {
-    crc ^= data.charCodeAt(i) << 8;
-    for (let j = 0; j < 8; j++) {
-      if (crc & 0x8000) {
-        crc = (crc << 1) ^ 0x1021;
-      } else {
-        crc <<= 1;
-      }
-    }
-  }
-  return (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, "0");
-}
+// Nota: La función calculateCRC16CCITT fue reemplazada por la librería 'crc'
+// que proporciona una implementación probada y confiable de CRC16-CCITT
+// La librería 'crc' se importa al inicio del archivo: import { crc16ccitt } from "crc";
 
 /**
  * Formatea longitud de campo EMVCo
