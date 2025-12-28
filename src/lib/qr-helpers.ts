@@ -5,7 +5,6 @@
 
 import { supabase } from "@/lib/supabase";
 import { GatewayFactory } from "@/lib/gateway-interface";
-import { crc16ccitt } from "crc";
 
 export interface QRGenerationResult {
   qr_code: string; // URL o base64 del QR
@@ -346,9 +345,10 @@ async function generateQRCodeBase64(data: string): Promise<string> {
     const QRCode = (await import('qrcode')).default;
     
     // Generar QR como data URL (base64)
+    // Tamaño aumentado a 400x400px según especificación
     const qrCodeBase64 = await QRCode.toDataURL(data, {
       type: 'image/png',
-      width: 300,
+      width: 400,
       margin: 2,
       color: {
         dark: '#000000',
@@ -626,10 +626,9 @@ function buildEMVCoPayload(params: {
   const payloadSinCRC = payload; // Payload sin campo 63
   const dataParaCRC = payloadSinCRC + "6304"; // Agregar campo 63 con longitud 04
   
-  // Usar librería 'crc' para calcular CRC16-CCITT correctamente
-  // EMVCo usa CRC16-CCITT con inicialización 0xFFFF (no XModem que usa 0x0000)
-  // crc16ccitt es la variante correcta para EMVCo QR codes
-  const crc = crc16ccitt(dataParaCRC);
+  // Calcular CRC16-CCITT manualmente según especificación EMVCo
+  // Algoritmo exacto según especificación Python proporcionada
+  const crc = calculateCRC16CCITT_Manual(dataParaCRC);
   const crcHex = crc.toString(16).toUpperCase().padStart(4, "0"); // 4 dígitos hexadecimales en mayúsculas
   
   // Debug logging (remover en producción)
@@ -644,9 +643,35 @@ function buildEMVCoPayload(params: {
   return payload;
 }
 
-// Nota: La función calculateCRC16CCITT fue reemplazada por la librería 'crc'
-// que proporciona una implementación probada y confiable de CRC16-CCITT
-// La librería 'crc' se importa al inicio del archivo: import { crc16ccitt } from "crc";
+/**
+ * Calcula CRC16-CCITT manualmente según especificación EMVCo
+ * Implementación exacta según algoritmo Python proporcionado
+ * 
+ * @param data - Cadena de datos sobre la cual calcular el CRC
+ * @returns Valor CRC16-CCITT como número entero
+ */
+function calculateCRC16CCITT_Manual(data: string): number {
+  let crc = 0xFFFF;
+  const polynomial = 0x1021;
+  
+  // Convertir string a bytes UTF-8
+  const bytes = Buffer.from(data, 'utf8');
+  
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i];
+    crc ^= (byte << 8);
+    for (let j = 0; j < 8; j++) {
+      if (crc & 0x8000) {
+        crc = (crc << 1) ^ polynomial;
+      } else {
+        crc <<= 1;
+      }
+      crc &= 0xFFFF;
+    }
+  }
+  
+  return crc & 0xFFFF;
+}
 
 /**
  * Formatea longitud de campo EMVCo
