@@ -647,10 +647,22 @@ function buildEMVCoPayload(params: {
  * Calcula CRC16-CCITT manualmente según especificación EMVCo
  * Implementación exacta según algoritmo Python proporcionado
  * 
+ * IMPORTANTE: El CRC se calcula sobre:
+ * - Payload completo SIN el campo 63 (CRC)
+ * - Más los caracteres "6304" (campo 63 + longitud)
+ * 
  * @param data - Cadena de datos sobre la cual calcular el CRC
  * @returns Valor CRC16-CCITT como número entero
  */
 function calculateCRC16CCITT_Manual(data: string): number {
+  /**
+   * Calcula CRC16-CCITT (polynomial 0x1021) según estándar EMV.
+   * 
+   * Algoritmo exacto según especificación Python:
+   * - Initial value: 0xFFFF
+   * - Polynomial: 0x1021 (CRC-16-CCITT)
+   * - Final XOR: 0x0000 (ninguno)
+   */
   let crc = 0xFFFF;
   const polynomial = 0x1021;
   
@@ -659,13 +671,17 @@ function calculateCRC16CCITT_Manual(data: string): number {
   
   for (let i = 0; i < bytes.length; i++) {
     const byte = bytes[i];
+    // XOR con byte desplazado 8 bits a la izquierda (exactamente como Python)
     crc ^= (byte << 8);
+    
+    // Procesar cada bit del byte
     for (let j = 0; j < 8; j++) {
       if (crc & 0x8000) {
         crc = (crc << 1) ^ polynomial;
       } else {
         crc <<= 1;
       }
+      // Mantener solo 16 bits después de cada operación
       crc &= 0xFFFF;
     }
   }
