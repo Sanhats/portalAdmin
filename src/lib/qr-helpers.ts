@@ -549,15 +549,17 @@ function buildEMVCoPayload(params: {
       throw new Error(`CBU/CVU debe tener exactamente 22 dígitos. Recibido: ${normalizedCBU.length} dígitos`);
     }
     
-    // Truncar reference a máximo 25 caracteres si es necesario
-    const normalizedReference = params.reference.substring(0, 25);
+    // ⚠️ CORRECCIÓN CRÍTICA: Terminal ID debe ser FIJO, no variable
+    // El Terminal ID identifica el punto de venta físico/lógico y NO debe cambiar entre transacciones
+    // La referencia de pago va en el campo 62 (Additional Data Field Template)
+    const terminalId = "TERMINAL01"; // ID fijo del terminal/POS
     
     // Formato EMVCo para Argentina Transferencias 3.0:
-    // 00 (GUI) + 01 (CBU/CVU) + 02 (Reference)
+    // 00 (GUI) + 01 (CBU/CVU) + 02 (Terminal ID - FIJO)
     const accountInfo = 
       "00" + padLength("AR", 2) + // GUI Argentina (longitud 2 dígitos)
       "01" + padLength(normalizedCBU, 2) + // CBU/CVU (longitud 2 dígitos para 22 caracteres)
-      "02" + padLength(normalizedReference, 2); // Reference (longitud 2 dígitos)
+      "02" + padLength(terminalId, 2); // Terminal ID FIJO (longitud 2 dígitos)
     
     // Validar que el campo 26 no exceda 99 caracteres
     if (accountInfo.length > 99) {

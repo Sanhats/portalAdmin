@@ -64,7 +64,42 @@ MERCHANT_CATEGORY_CODE=5492
 
 ---
 
-### 3. Validación y Normalización de Merchant Account Information
+### 3. ⚠️ **CRÍTICO**: Terminal ID Fijo en Campo 26
+
+**Problema:** El subcampo 02 del campo 26 estaba usando la referencia de pago (variable), cuando debe ser un **Terminal ID FIJO**.
+
+**Impacto:** Este error impedía el escaneo correcto en la mayoría de las billeteras (MODO, Naranja X, bancos).
+
+**Solución:**
+- Cambiar el subcampo 02 del campo 26 para usar un Terminal ID fijo (`"TERMINAL01"`)
+- La referencia de pago (variable) se mantiene correctamente en el campo 62
+
+**Código:**
+```typescript
+// ❌ ANTES (INCORRECTO):
+const normalizedReference = params.reference.substring(0, 25);
+const accountInfo = 
+  "00" + padLength("AR", 2) +
+  "01" + padLength(normalizedCBU, 2) +
+  "02" + padLength(normalizedReference, 2); // ❌ Variable
+
+// ✅ AHORA (CORRECTO):
+const terminalId = "TERMINAL01"; // ✅ Fijo
+const accountInfo = 
+  "00" + padLength("AR", 2) +
+  "01" + padLength(normalizedCBU, 2) +
+  "02" + padLength(terminalId, 2); // ✅ Siempre el mismo
+```
+
+**Estructura correcta:**
+- **Campo 26, subcampo 02**: Terminal ID FIJO (identifica el punto de venta)
+- **Campo 62, subcampo 05**: Reference VARIABLE (identifica la transacción)
+
+**Fecha de corrección:** 4 de enero de 2026
+
+---
+
+### 4. Validación y Normalización de Merchant Account Information
 
 **Problema:** No había validación del formato del CBU/CVU ni del tamaño del campo 26.
 
@@ -72,7 +107,6 @@ MERCHANT_CATEGORY_CODE=5492
 - Validación de que CBU/CVU tenga exactamente 22 dígitos
 - Normalización (remueve caracteres no numéricos)
 - Validación de que el campo 26 no exceda 99 caracteres
-- Truncado automático de reference a máximo 25 caracteres
 
 **Código:**
 ```typescript
@@ -82,9 +116,6 @@ if (normalizedCBU.length !== 22) {
   throw new Error(`CBU/CVU debe tener exactamente 22 dígitos`);
 }
 
-// Truncar reference si es necesario
-const normalizedReference = params.reference.substring(0, 25);
-
 // Validar tamaño del campo 26
 if (accountInfo.length > 99) {
   throw new Error(`Merchant Account Information excede 99 caracteres`);
@@ -93,7 +124,7 @@ if (accountInfo.length > 99) {
 
 ---
 
-### 4. Formato de Transaction Amount Corregido
+### 5. Formato de Transaction Amount Corregido
 
 **Problema:** El formato del monto podría no estar siguiendo exactamente la especificación EMVCo.
 
@@ -151,15 +182,19 @@ Verifica que:
 ```
 00 02 01                    # Payload Format Indicator: "01"
 01 02 12                    # Point of Initiation: "12" (static) ✅ CORREGIDO
-26 XX 0002AR01...           # Merchant Account Information
+26 43 0002AR0122...020A...  # Merchant Account Information
+   ├─ 00 02 AR             # GUI: Argentina
+   ├─ 01 22 0110343...     # CBU/CVU (22 dígitos)
+   └─ 02 0A TERMINAL01     # Terminal ID FIJO ✅ CORREGIDO
 52 04 5492                  # Merchant Category Code: "5492" ✅ CORREGIDO
 53 03 032                   # Transaction Currency: "032" (ARS)
 54 XX 100000                # Transaction Amount (formato corregido) ✅
 58 02 AR                    # Country Code: "AR"
 59 XX Toludev shop          # Merchant Name
 60 XX Argentina             # Merchant City
-62 XX 0500...               # Additional Data Field Template
-63 04 B509                  # CRC
+62 XX 05XX...               # Additional Data Field Template
+   └─ 05 XX SALE-EC08FEBC  # Reference Label VARIABLE ✅
+63 04 XXXX                  # CRC
 ```
 
 ---
@@ -172,6 +207,7 @@ Verifica que:
 |-------|-------|-------|--------|
 | Point of Initiation | `11` (dynamic) | `12` (static) | ✅ Corregido |
 | Merchant Category Code | `0000` | `5492` | ✅ Corregido |
+| **Terminal ID (Campo 26-02)** | **Variable** | **FIJO** | ✅ **CRÍTICO** |
 | CBU/CVU Validation | Sin validación | Validado (22 dígitos) | ✅ Agregado |
 | Transaction Amount | Formato dudoso | Formato correcto | ✅ Corregido |
 | Field 26 Size | Sin validación | Validado (≤99 chars) | ✅ Agregado |
@@ -212,6 +248,6 @@ WHERE provider = 'interoperable_qr';
 
 ---
 
-**Última actualización:** Diciembre 2024
-**Versión:** 1.1.0
+**Última actualización:** 4 de enero de 2026
+**Versión:** 1.2.0 - **Corrección crítica del Terminal ID aplicada**
 
