@@ -1,8 +1,15 @@
 import { supabase } from "@/lib/supabase";
 import { confirmPaymentSchema } from "@/validations/payment";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
-import { extractBearerToken, validateBearerToken } from "@/lib/auth";
-import { recalculateSaleBalance, logPaymentEvent, confirmPayment } from "@/lib/payment-helpers";
+import { extractBearerToken, validateBearerToken, canConfirmPayments } from "@/lib/auth";
+import { 
+  recalculateSaleBalance, 
+  logPaymentEvent, 
+  confirmPayment,
+  canConfirmPayment,
+  validatePaymentAmount,
+  checkDuplicateConfirmation
+} from "@/lib/payment-helpers";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -24,6 +31,14 @@ export async function PATCH(
     const user = await validateBearerToken(token);
     if (!user) {
       return errorResponse("No autorizado. Token inválido o expirado", 401);
+    }
+
+    // SPRINT 2: Validar rol del usuario
+    if (!canConfirmPayments(user)) {
+      return errorResponse(
+        "No autorizado. No tienes permisos para confirmar pagos. Se requiere rol de admin, manager o cashier",
+        403
+      );
     }
 
     // Validar UUID
@@ -71,12 +86,47 @@ export async function PATCH(
     const sale = payment.sales as any;
     const tenantId = sale?.tenant_id || payment.tenant_id;
 
-    // SPRINT 1: Validar que el pago puede ser confirmado manualmente
-    // Solo pagos en estado pending pueden ser confirmados manualmente
-    if (payment.status !== "pending") {
+    // SPRINT 2: Validación robusta del estado del pago
+    const stateValidation = canConfirmPayment(payment);
+    if (!stateValidation.valid) {
+      return errorResponse(stateValidation.reason || "El pago no puede ser confirmado", 400);
+    }
+
+    // SPRINT 2: Validación del monto del pago
+    const amountValidation = validatePaymentAmount(payment);
+    if (!amountValidation.valid) {
+      return errorResponse(amountValidation.reason || "El monto del pago es inválido", 400);
+    }
+
+    // SPRINT 2: Verificar idempotencia - evitar doble confirmación
+    const duplicateCheck = await checkDuplicateConfirmation(params.id, user.id);
+    if (duplicateCheck.isDuplicate) {
+      console.log(`[PATCH /api/payments/:id/confirm] Confirmación duplicada detectada para pago ${params.id} por usuario ${user.id}`);
+      
+      // Retornar el pago actual (ya confirmado) en lugar de error
+      const { data: existingPayment, error: fetchError } = await supabase
+        .from("payments")
+        .select(`
+          *,
+          payment_methods:payment_method_id (
+            id,
+            code,
+            label,
+            type,
+            is_active
+          )
+        `)
+        .eq("id", params.id)
+        .single();
+      
+      if (!fetchError && existingPayment) {
+        return jsonResponse(existingPayment, 200); // 200 porque ya está confirmado
+      }
+      
+      // Si no se puede obtener, retornar error
       return errorResponse(
-        `No se puede confirmar un pago en estado '${payment.status}'. Solo se pueden confirmar pagos en estado 'pending'`,
-        400
+        "Este pago ya fue confirmado recientemente. Por favor, verifica el estado del pago",
+        409
       );
     }
 
@@ -140,16 +190,59 @@ export async function PATCH(
 
     console.log("[PATCH /api/payments/:id/confirm] Actualizando pago con datos:", JSON.stringify(updateData, null, 2));
 
+    // SPRINT 2: Actualizar con condición WHERE para proteger contra condiciones de carrera
+    // Solo actualizar si el estado actual es 'pending' (protección a nivel de BD)
     const { data: updatedPayment, error: updateError } = await supabase
       .from("payments")
       .update(updateData)
       .eq("id", params.id)
+      .eq("status", "pending") // SPRINT 2: Protección adicional - solo actualizar si está en pending
       .select()
       .single();
 
     if (updateError || !updatedPayment) {
-      console.error("[POST /api/payments/:id/confirm] Error al actualizar pago:", updateError);
-      console.error("[POST /api/payments/:id/confirm] Update data:", JSON.stringify(updateData, null, 2));
+      // Si no se actualizó, puede ser porque el estado cambió (condición de carrera)
+      if (updateError?.code === "PGRST116" || !updatedPayment) {
+        // Verificar el estado actual del pago
+        const { data: currentPayment } = await supabase
+          .from("payments")
+          .select("status, confirmed_at, confirmed_by")
+          .eq("id", params.id)
+          .single();
+        
+        if (currentPayment?.status === "confirmed") {
+          // El pago ya fue confirmado (probablemente por otra request simultánea)
+          console.log(`[PATCH /api/payments/:id/confirm] Pago ${params.id} ya fue confirmado por otra request`);
+          
+          // Retornar el pago actual
+          const { data: existingPayment } = await supabase
+            .from("payments")
+            .select(`
+              *,
+              payment_methods:payment_method_id (
+                id,
+                code,
+                label,
+                type,
+                is_active
+              )
+            `)
+            .eq("id", params.id)
+            .single();
+          
+          if (existingPayment) {
+            return jsonResponse(existingPayment, 200);
+          }
+        }
+        
+        return errorResponse(
+          "No se pudo confirmar el pago. El estado del pago puede haber cambiado. Por favor, verifica el estado actual",
+          409
+        );
+      }
+      
+      console.error("[PATCH /api/payments/:id/confirm] Error al actualizar pago:", updateError);
+      console.error("[PATCH /api/payments/:id/confirm] Update data:", JSON.stringify(updateData, null, 2));
       return errorResponse("Error al confirmar el pago", 500, updateError?.message, updateError?.code);
     }
 

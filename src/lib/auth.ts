@@ -57,9 +57,22 @@ export function extractBearerToken(authHeader: string | null): string | null {
 }
 
 /**
+ * Obtiene el rol del usuario desde user_metadata
+ * @param user - Usuario de Supabase
+ * @returns Rol del usuario o 'user' por defecto
+ */
+export function getUserRole(user: any): string {
+  if (!user) {
+    return 'user';
+  }
+
+  // Obtener rol de user_metadata o app_metadata
+  const role = user.user_metadata?.role || user.app_metadata?.role || 'user';
+  return role.toLowerCase();
+}
+
+/**
  * Verifica si un usuario tiene rol de admin
- * Por ahora, cualquier usuario autenticado es considerado admin
- * Puedes mejorar esto agregando un campo role en user_metadata
  * @param user - Usuario de Supabase
  * @returns true si es admin, false en caso contrario
  */
@@ -68,8 +81,24 @@ export function isAdmin(user: any): boolean {
     return false;
   }
 
-  // Por ahora, cualquier usuario autenticado es admin
-  // Puedes mejorar esto verificando user.user_metadata.role === 'admin'
-  return true;
+  const role = getUserRole(user);
+  return role === 'admin' || role === 'super_admin';
+}
+
+/**
+ * Verifica si un usuario tiene permisos para confirmar pagos
+ * SPRINT 2: Solo admin, manager o cashier pueden confirmar pagos
+ * @param user - Usuario de Supabase
+ * @returns true si puede confirmar pagos, false en caso contrario
+ */
+export function canConfirmPayments(user: any): boolean {
+  if (!user) {
+    return false;
+  }
+
+  const role = getUserRole(user);
+  // Roles permitidos: admin, manager, cashier
+  const allowedRoles = ['admin', 'super_admin', 'manager', 'cashier'];
+  return allowedRoles.includes(role);
 }
 
