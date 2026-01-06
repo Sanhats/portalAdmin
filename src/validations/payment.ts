@@ -55,8 +55,10 @@ export const createPaymentSchema = z.object({
 
 // SPRINT 1: Esquema para confirmar pago
 export const confirmPaymentSchema = z.object({
-  // Opcional: metadata adicional al confirmar
+  // SPRINT 4: Opcional: metadata adicional al confirmar (puede incluir comprobante_url)
   metadata: z.record(z.any()).optional().nullable(),
+  // SPRINT 4: Campo directo para comprobante_url (conveniencia)
+  comprobante_url: z.string().url("La URL del comprobante debe ser válida").optional().nullable(),
   // SPRINT F: Campos de evidencia de pago (opcional al confirmar)
   proofType: z.enum(["qr_code", "receipt", "transfer_screenshot", "pos_ticket", "other"]).optional(),
   proofReference: z.string().max(255).optional().nullable(),

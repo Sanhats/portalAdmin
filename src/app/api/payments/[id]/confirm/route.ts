@@ -164,11 +164,18 @@ export async function PATCH(
       confirmed_at: new Date().toISOString(), // SPRINT 1: Fecha de confirmación
     };
 
-    // SPRINT 1: Actualizar metadata si se proporciona
-    if (parsed.data.metadata) {
+    // SPRINT 4: Actualizar metadata si se proporciona
+    if (parsed.data.metadata || parsed.data.comprobante_url) {
       // Combinar metadata existente con el nuevo
       const existingMetadata = (payment as any).metadata || {};
-      updateData.metadata = { ...existingMetadata, ...parsed.data.metadata };
+      const newMetadata = { ...existingMetadata, ...parsed.data.metadata };
+      
+      // SPRINT 4: Si se proporciona comprobante_url directamente, agregarlo a metadata
+      if (parsed.data.comprobante_url) {
+        newMetadata.comprobante_url = parsed.data.comprobante_url;
+      }
+      
+      updateData.metadata = newMetadata;
     }
 
     // SPRINT F: Agregar evidencia de pago si se proporciona

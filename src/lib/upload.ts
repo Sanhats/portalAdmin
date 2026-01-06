@@ -119,3 +119,104 @@ export async function deleteFile(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * SPRINT 4: Sube evidencia de pago (imagen o PDF) a Supabase Storage
+ * @param file - Archivo a subir (imagen o PDF)
+ * @param paymentId - ID del pago (opcional, para organizar archivos)
+ * @returns Resultado de la subida con URL pública
+ */
+export async function uploadPaymentEvidence(
+  file: File,
+  paymentId?: string
+): Promise<UploadResult> {
+  try {
+    // SPRINT 4: Validar tipo de archivo (imágenes y PDFs)
+    const allowedTypes = [
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "application/pdf",
+    ];
+    
+    if (!allowedTypes.includes(file.type)) {
+      return {
+        success: false,
+        error: "Tipo de archivo no permitido. Solo se permiten imágenes (JPEG, PNG, WebP, GIF) o PDFs",
+      };
+    }
+
+    // SPRINT 4: Validar tamaño (10MB para evidencia)
+    const MAX_EVIDENCE_SIZE = 10 * 1024 * 1024; // 10MB
+    if (file.size > MAX_EVIDENCE_SIZE) {
+      return {
+        success: false,
+        error: `El archivo no puede ser mayor a ${MAX_EVIDENCE_SIZE / 1024 / 1024}MB`,
+      };
+    }
+
+    // Generar nombre único
+    const fileExt = file.name.split(".").pop();
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(7);
+    const fileName = paymentId 
+      ? `payment-${paymentId}-${timestamp}-${randomStr}.${fileExt}`
+      : `evidence-${timestamp}-${randomStr}.${fileExt}`;
+    
+    // SPRINT 4: Guardar en carpeta payment-evidence
+    const folder = "payment-evidence";
+    const filePath = `${folder}/${fileName}`;
+
+    // Convertir File a Buffer
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Subir a Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(BUCKET_NAME)
+      .upload(filePath, buffer, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      return {
+        success: false,
+        error: uploadError.message,
+      };
+    }
+
+    // Obtener URL pública
+    const { data: urlData } = supabase.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    if (!urlData?.publicUrl) {
+      // Limpiar archivo subido si falla
+      await supabase.storage.from(BUCKET_NAME).remove([filePath]);
+      return {
+        success: false,
+        error: "Error al obtener la URL pública del archivo",
+      };
+    }
+
+    return {
+      success: true,
+      file: {
+        id: uploadData.path,
+        fileName: fileName,
+        filePath: filePath,
+        url: urlData.publicUrl,
+        size: file.size,
+        type: file.type,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido al subir archivo",
+    };
+  }
+}
+
