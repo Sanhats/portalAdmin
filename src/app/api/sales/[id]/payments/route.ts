@@ -2,8 +2,14 @@ import { supabase } from "@/lib/supabase";
 import { createPaymentSchema } from "@/validations/payment";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
-import { recalculateSaleBalance, logPaymentEvent } from "@/lib/payment-helpers";
-import { generateIdempotencyKey, getInitialPaymentStatus } from "@/lib/payment-helpers-sprint-b";
+import { 
+  recalculateSaleBalance, 
+  logPaymentEvent,
+  determinePaymentProvider,
+  getInitialPaymentStatus as getInitialStatus,
+  confirmPayment
+} from "@/lib/payment-helpers";
+import { generateIdempotencyKey } from "@/lib/payment-helpers-sprint-b";
 import { generateQRPayment, isQRPaymentMethod } from "@/lib/qr-helpers";
 import { z } from "zod";
 
@@ -179,33 +185,40 @@ export async function POST(
       }
     }
     
-    // SPRINT B: Determinar estado inicial según reglas (backend decide, no frontend)
-    // El backend SIEMPRE decide el estado inicial según el tipo de pago
-    // Solo respetamos el status proporcionado si es compatible con las reglas
-    let paymentStatus: "pending" | "confirmed" | "failed" | "refunded";
+    // SPRINT 1: Determinar provider según el método
+    let provider = parsed.data.provider || determinePaymentProvider(method, paymentMethodId);
     
-    // Calcular el estado inicial según el tipo
-    const calculatedInitialStatus = getInitialPaymentStatus(paymentCategory);
+    // SPRINT 1: Determinar estado inicial según reglas (backend decide, no frontend)
+    // Reglas: Pagos manuales → confirmed, Pagos automáticos → pending
+    let paymentStatus: "pending" | "confirmed";
+    
+    // Calcular el estado inicial según el provider
+    const calculatedInitialStatus = getInitialStatus(provider);
     
     // Si se proporciona status explícitamente, validar compatibilidad
-    if (statusProvidedExplicitly && body.status && body.status !== calculatedInitialStatus) {
-      // Si el status proporcionado difiere del calculado, validar compatibilidad
-      if (body.status === "confirmed" && paymentCategory === "gateway") {
-        // Gateway no puede iniciar en confirmed
-        return errorResponse("Los pagos de gateway siempre inician en estado 'pending'. No se puede crear directamente como 'confirmed'", 400);
-      }
-      // Si es compatible, usar el proporcionado (solo para casos especiales como "failed", "processing")
-      if (["pending", "processing", "confirmed", "failed", "refunded"].includes(body.status)) {
-        paymentStatus = body.status;
+    if (statusProvidedExplicitly && parsed.data.status) {
+      // Validar que el status proporcionado sea válido (pending o confirmed)
+      if (parsed.data.status === "pending" || parsed.data.status === "confirmed") {
+        // Si es manual y se intenta crear como pending, permitirlo (flexibilidad)
+        // Si es automático y se intenta crear como confirmed, validar
+        if (provider === "manual" && parsed.data.status === "pending") {
+          // Permitir pending incluso para manuales (casos especiales)
+          paymentStatus = parsed.data.status;
+        } else if (provider !== "manual" && parsed.data.status === "confirmed") {
+          // Automáticos no pueden iniciar en confirmed (deben pasar por confirmación)
+          return errorResponse("Los pagos automáticos siempre inician en estado 'pending'. No se puede crear directamente como 'confirmed'", 400);
+        } else {
+          paymentStatus = parsed.data.status;
+        }
       } else {
         paymentStatus = calculatedInitialStatus;
       }
     } else {
-      // SPRINT B: El backend decide el estado inicial según el tipo
+      // SPRINT 1: El backend decide el estado inicial según el provider
       paymentStatus = calculatedInitialStatus;
     }
     
-    console.log(`[POST /api/sales/:id/payments] Estado final ANTES de insert: paymentStatus=${paymentStatus}, paymentCategory=${paymentCategory}, calculatedInitialStatus=${calculatedInitialStatus}, statusProvidedExplicitly=${statusProvidedExplicitly}, body.status=${body.status}`);
+    console.log(`[POST /api/sales/:id/payments] SPRINT 1 - provider=${provider}, paymentStatus=${paymentStatus}, method=${method}`);
     
     // SPRINT B: Generar idempotency_key para evitar duplicados
     // Incluir payment_method_id para diferenciar métodos con el mismo type
@@ -261,25 +274,41 @@ export async function POST(
       gateway_metadata: parsed.data.gatewayMetadata || null,
     };
     
-    // SPRINT B/C: Crear el pago con idempotency_key
-    // Asegurar que paymentStatus tenga un valor válido
-    const finalStatus: "pending" | "processing" | "confirmed" | "failed" | "refunded" = paymentStatus || getInitialPaymentStatus(paymentCategory);
+    // SPRINT 1: Crear el pago con el modelo definitivo
+    const finalStatus: "pending" | "confirmed" = paymentStatus;
+    
+    // SPRINT 1: Preparar metadata (unificar gatewayMetadata y metadata)
+    let metadata: any = parsed.data.metadata || null;
+    if (isQR && qrMetadata) {
+      metadata = { ...metadata, ...qrMetadata };
+    }
+    if (parsed.data.gatewayMetadata) {
+      metadata = { ...metadata, ...parsed.data.gatewayMetadata };
+    }
     
     // Paso 1: Log real del insert
     const insertPayload: any = {
       sale_id: params.id,
       tenant_id: tenantId,
       amount: amount.toString(),
-      method: method, // Backward compatibility
+      method: method,
       payment_method_id: paymentMethodId,
-      status: finalStatus, // SPRINT B: Estado determinado por el backend según el tipo
+      status: finalStatus, // SPRINT 1: pending | confirmed
+      provider: provider, // SPRINT 1: manual | mercadopago | banco | pos
       reference: parsed.data.reference || null,
+      metadata: metadata, // SPRINT 1: Metadata JSON unificado
       external_reference: parsed.data.externalReference || null,
-      // Si es QR, usar el metadata generado; sino usar el proporcionado o null
-      gateway_metadata: isQR ? qrMetadata : (parsed.data.gatewayMetadata || null),
-      idempotency_key: idempotencyKey, // SPRINT B: Clave de idempotencia
+      gateway_metadata: isQR ? qrMetadata : (parsed.data.gatewayMetadata || null), // Backward compatibility
+      idempotency_key: idempotencyKey,
       created_by: user.id,
     };
+    
+    // SPRINT 1: Si el pago se crea como confirmed (manual), establecer confirmed_by y confirmed_at
+    if (finalStatus === "confirmed") {
+      // Si es manual, fue confirmado por el sistema al crearse
+      insertPayload.confirmed_by = null; // null = system
+      insertPayload.confirmed_at = new Date().toISOString();
+    }
 
     // SPRINT F: Agregar campos de evidencia de pago si se proporcionan
     if (parsed.data.proofType) {

@@ -103,7 +103,7 @@ export async function recalculateSaleBalance(saleId: string): Promise<{
  */
 export async function logPaymentEvent(
   paymentId: string,
-  action: "created" | "deleted" | "status_changed",
+  action: "created" | "deleted" | "status_changed" | "confirmed" | "cancelled",
   previousState: any,
   newState: any,
   userId: string
@@ -121,6 +121,91 @@ export async function logPaymentEvent(
   } catch (error) {
     // No fallar si no se puede registrar el evento, solo loguear
     console.warn("[logPaymentEvent] No se pudo registrar evento de auditoría:", error);
+  }
+}
+
+/**
+ * SPRINT 1: Determina el proveedor del pago según el método
+ */
+export function determinePaymentProvider(
+  method: string | null | undefined,
+  paymentMethodId: string | null | undefined
+): "manual" | "mercadopago" | "banco" | "pos" | null {
+  if (!method) return null;
+  
+  const methodLower = method.toLowerCase();
+  
+  // Mercado Pago
+  if (methodLower === "mp_point" || methodLower === "mercadopago") {
+    return "mercadopago";
+  }
+  
+  // Banco (transferencias)
+  if (methodLower === "transfer") {
+    return "banco";
+  }
+  
+  // POS
+  if (methodLower === "card") {
+    return "pos";
+  }
+  
+  // Manual (efectivo y otros)
+  if (methodLower === "cash" || methodLower === "other") {
+    return "manual";
+  }
+  
+  // QR puede ser manual o mercadopago según el contexto
+  if (methodLower === "qr") {
+    // Por defecto manual, pero puede ser mercadopago si viene de un gateway
+    return "manual";
+  }
+  
+  return "manual"; // Default
+}
+
+/**
+ * SPRINT 1: Determina el estado inicial del pago según el proveedor
+ * Reglas:
+ * - Pagos manuales → status = confirmed por defecto
+ * - Pagos automáticos (mercadopago, banco, pos) → pending
+ */
+export function getInitialPaymentStatus(
+  provider: "manual" | "mercadopago" | "banco" | "pos" | null
+): "pending" | "confirmed" {
+  // Pagos manuales se confirman automáticamente
+  if (provider === "manual") {
+    return "confirmed";
+  }
+  
+  // Pagos automáticos inician en pending
+  return "pending";
+}
+
+/**
+ * SPRINT 1: Confirma un pago y actualiza confirmed_by y confirmed_at
+ */
+export async function confirmPayment(
+  paymentId: string,
+  userId: string | null = null
+): Promise<void> {
+  const updateData: any = {
+    status: "confirmed",
+    confirmed_at: new Date().toISOString(),
+  };
+  
+  // Si userId es null, significa que fue confirmado por el sistema
+  if (userId) {
+    updateData.confirmed_by = userId;
+  }
+  
+  const { error } = await supabase
+    .from("payments")
+    .update(updateData)
+    .eq("id", paymentId);
+  
+  if (error) {
+    throw error;
   }
 }
 

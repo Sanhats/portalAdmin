@@ -1,22 +1,14 @@
 import { supabase } from "@/lib/supabase";
+import { confirmPaymentSchema } from "@/validations/payment";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
-import { recalculateSaleBalance, logPaymentEvent } from "@/lib/payment-helpers";
+import { recalculateSaleBalance, logPaymentEvent, confirmPayment } from "@/lib/payment-helpers";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
 
-// SPRINT F: Schema para confirmar pago manualmente
-const confirmPaymentSchema = z.object({
-  proofType: z.enum(["qr_code", "receipt", "transfer_screenshot", "pos_ticket", "other"]).optional(),
-  proofReference: z.string().max(255).optional().nullable(),
-  proofFileUrl: z.string().url().optional().nullable(),
-  terminalId: z.string().max(100).optional().nullable(),
-  cashRegisterId: z.string().max(100).optional().nullable(),
-});
-
-// POST /api/payments/:id/confirm - Confirmar pago manualmente (para gateways QR/POS)
-export async function POST(
+// SPRINT 1: PATCH /api/payments/:id/confirm - Confirmar pago manualmente
+export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
@@ -41,13 +33,13 @@ export async function POST(
     }
 
     const body = await req.json();
-    console.log("[POST /api/payments/:id/confirm] Body recibido:", JSON.stringify(body, null, 2));
+    console.log("[PATCH /api/payments/:id/confirm] Body recibido:", JSON.stringify(body, null, 2));
 
     // Validar datos
     const parsed = confirmPaymentSchema.safeParse(body);
     
     if (!parsed.success) {
-      console.error("[POST /api/payments/:id/confirm] Error de validación:", parsed.error.errors);
+      console.error("[PATCH /api/payments/:id/confirm] Error de validación:", parsed.error.errors);
       return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
 
@@ -79,11 +71,11 @@ export async function POST(
     const sale = payment.sales as any;
     const tenantId = sale?.tenant_id || payment.tenant_id;
 
-    // SPRINT F: Validar que el pago puede ser confirmado manualmente
-    // Solo pagos en estado pending o processing pueden ser confirmados manualmente
-    if (payment.status !== "pending" && payment.status !== "processing") {
+    // SPRINT 1: Validar que el pago puede ser confirmado manualmente
+    // Solo pagos en estado pending pueden ser confirmados manualmente
+    if (payment.status !== "pending") {
       return errorResponse(
-        `No se puede confirmar un pago en estado '${payment.status}'. Solo se pueden confirmar pagos en estado 'pending' o 'processing'`,
+        `No se puede confirmar un pago en estado '${payment.status}'. Solo se pueden confirmar pagos en estado 'pending'`,
         400
       );
     }
@@ -114,11 +106,20 @@ export async function POST(
     // Los pagos manuales ya deberían estar en confirmed, pero permitimos confirmarlos si están en pending
     // Los pagos gateway/external pueden requerir confirmación manual
 
-    // SPRINT F: Actualizar estado del pago a confirmed
+    // SPRINT 1: Actualizar estado del pago a confirmed con auditoría
     const previousStatus = payment.status;
     const updateData: any = {
       status: "confirmed",
+      confirmed_by: user.id, // SPRINT 1: Usuario que confirma
+      confirmed_at: new Date().toISOString(), // SPRINT 1: Fecha de confirmación
     };
+
+    // SPRINT 1: Actualizar metadata si se proporciona
+    if (parsed.data.metadata) {
+      // Combinar metadata existente con el nuevo
+      const existingMetadata = (payment as any).metadata || {};
+      updateData.metadata = { ...existingMetadata, ...parsed.data.metadata };
+    }
 
     // SPRINT F: Agregar evidencia de pago si se proporciona
     if (parsed.data.proofType) {
@@ -137,7 +138,7 @@ export async function POST(
       updateData.cash_register_id = parsed.data.cashRegisterId;
     }
 
-    console.log("[POST /api/payments/:id/confirm] Actualizando pago con datos:", JSON.stringify(updateData, null, 2));
+    console.log("[PATCH /api/payments/:id/confirm] Actualizando pago con datos:", JSON.stringify(updateData, null, 2));
 
     const { data: updatedPayment, error: updateError } = await supabase
       .from("payments")
@@ -152,42 +153,44 @@ export async function POST(
       return errorResponse("Error al confirmar el pago", 500, updateError?.message, updateError?.code);
     }
 
-    console.log(`[POST /api/payments/:id/confirm] Pago ${params.id} confirmado: ${previousStatus} → confirmed`);
+    console.log(`[PATCH /api/payments/:id/confirm] Pago ${params.id} confirmado: ${previousStatus} → confirmed`);
 
-    // SPRINT F: Registrar evento de auditoría
+    // SPRINT 1: Registrar evento de auditoría
     const previousState = {
       status: previousStatus,
       amount: payment.amount,
       method: payment.method,
+      provider: (payment as any).provider || null,
     };
 
     const newState = {
       status: "confirmed",
       amount: payment.amount,
       method: payment.method,
-      proof_type: parsed.data.proofType || null,
-      proof_reference: parsed.data.proofReference || null,
+      provider: (payment as any).provider || null,
       confirmed_by: user.id,
+      confirmed_at: updateData.confirmed_at,
+      metadata: updateData.metadata || null,
     };
 
     await logPaymentEvent(
       params.id,
-      "status_changed",
+      "confirmed",
       previousState,
       newState,
       user.id
     );
 
-    // SPRINT F: Recalcular balance de la venta
+    // SPRINT 1: Recalcular balance de la venta
     try {
       const balanceResult = await recalculateSaleBalance(payment.sale_id);
-      console.log(`[POST /api/payments/:id/confirm] Balance recalculado para venta ${payment.sale_id}:`, {
+      console.log(`[PATCH /api/payments/:id/confirm] Balance recalculado para venta ${payment.sale_id}:`, {
         paidAmount: balanceResult.paidAmount,
         balanceAmount: balanceResult.balanceAmount,
         isPaid: balanceResult.isPaid,
       });
     } catch (balanceError) {
-      console.error("[POST /api/payments/:id/confirm] Error al recalcular balance:", balanceError);
+      console.error("[PATCH /api/payments/:id/confirm] Error al recalcular balance:", balanceError);
       // No fallar, solo loguear
     }
 
@@ -208,13 +211,13 @@ export async function POST(
       .single();
 
     if (fetchError || !paymentComplete) {
-      console.error("[POST /api/payments/:id/confirm] Error al obtener pago completo:", fetchError);
+      console.error("[PATCH /api/payments/:id/confirm] Error al obtener pago completo:", fetchError);
       return jsonResponse(updatedPayment, 200);
     }
 
     return jsonResponse(paymentComplete, 200);
   } catch (error) {
-    return handleUnexpectedError(error, "POST /api/payments/:id/confirm");
+    return handleUnexpectedError(error, "PATCH /api/payments/:id/confirm");
   }
 }
 

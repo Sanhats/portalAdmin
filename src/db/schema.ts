@@ -164,20 +164,29 @@ export const paymentIntents = pgTable("payment_intents", {
 });
 
 // Sistema de Pagos: Pagos de ventas
+// SPRINT 1: Modelo definitivo de registro de cobros
 export const payments = pgTable("payments", {
   id: uuid("id").defaultRandom().primaryKey(),
   saleId: uuid("sale_id").references(() => sales.id, { onDelete: "cascade" }).notNull(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
   amount: numeric("amount").notNull(),
-  method: text("method"), // cash | transfer | mercadopago | qr | card | gateway | other (backward compatibility)
+  // SPRINT 1: Método de pago unificado
+  method: text("method"), // cash | transfer | mp_point | qr | card | other
   paymentMethodId: uuid("payment_method_id").references(() => paymentMethods.id, { onDelete: "set null" }), // FK a payment_methods
-  // SPRINT B/C: NO debe tener default. El backend decide el estado inicial según el tipo de pago
-  status: text("status").notNull(), // pending | processing | confirmed | failed | refunded
+  // SPRINT 1: Estado simplificado: pending | confirmed
+  status: text("status").notNull(), // pending | confirmed (backward compatibility: processing | failed | refunded)
+  // SPRINT 1: Proveedor del pago
+  provider: text("provider"), // manual | mercadopago | banco | pos
   reference: text("reference"), // Nro transferencia, comprobante, etc.
+  // SPRINT 1: Metadata JSON para información adicional
+  metadata: jsonb("metadata"), // JSON para datos adicionales
+  // SPRINT 1: Auditoría de confirmación
+  confirmedBy: uuid("confirmed_by"), // user_id | null (null = system)
+  confirmedAt: timestamp("confirmed_at"), // Fecha de confirmación
   createdBy: uuid("created_by").notNull(), // ID del usuario que creó el pago
   // Preparación para pasarelas (Mercado Pago, etc.)
   externalReference: text("external_reference"), // ID externo de la pasarela (ej: payment_id de MP)
-  gatewayMetadata: jsonb("gateway_metadata"), // Metadata JSON de la pasarela (webhooks, respuestas, etc.)
+  gatewayMetadata: jsonb("gateway_metadata"), // Metadata JSON de la pasarela (webhooks, respuestas, etc.) - backward compatibility
   // SPRINT B: Idempotencia - Hash único para evitar duplicados por retries
   idempotencyKey: text("idempotency_key"), // Hash único basado en sale_id, amount, method, external_reference
   // SPRINT F: Campos de evidencia de pago (para QR/POS)
