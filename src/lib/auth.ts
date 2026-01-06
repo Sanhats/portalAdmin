@@ -10,6 +10,21 @@ export const supabaseAuth = createClient(
 );
 
 /**
+ * Crea un cliente de Supabase Admin para operaciones administrativas
+ * Usa service_role_key para tener permisos completos
+ */
+export const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+);
+
+/**
  * Valida un token Bearer de Supabase
  * @param token - Token Bearer (sin el prefijo "Bearer ")
  * @returns Usuario autenticado o null
