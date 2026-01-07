@@ -241,3 +241,29 @@ export const paymentEvents = pgTable("payment_events", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// SPRINT B1: Sistema de Contabilidad Operativa - Cajas Diarias
+export const cashBoxes = pgTable("cash_boxes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  date: timestamp("date").notNull(), // Fecha de la caja (solo fecha, sin hora)
+  openingBalance: numeric("opening_balance").notNull().default("0"), // Saldo inicial
+  closingBalance: numeric("closing_balance"), // Saldo final (calculado al cerrar)
+  status: text("status").notNull().default("open"), // 'open' | 'closed'
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT B1: Sistema de Contabilidad Operativa - Movimientos de Caja
+export const cashMovements = pgTable("cash_movements", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  cashBoxId: uuid("cash_box_id").references(() => cashBoxes.id, { onDelete: "cascade" }).notNull(), // OBLIGATORIO
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  type: text("type").notNull(), // 'income' | 'expense'
+  amount: numeric("amount").notNull(), // Monto del movimiento
+  paymentMethod: text("payment_method").notNull(), // 'cash' | 'transfer'
+  reference: text("reference"), // Texto descriptivo libre (ej: "Venta #1234", "Compra insumos")
+  // Trazabilidad opcional
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }), // FK opcional a payments
+  saleId: uuid("sale_id").references(() => sales.id, { onDelete: "set null" }), // FK opcional a sales
+  createdAt: timestamp("created_at").defaultNow(),
+});

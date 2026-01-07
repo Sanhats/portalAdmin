@@ -294,6 +294,27 @@ export async function PATCH(
       // No fallar, solo loguear
     }
 
+    // SPRINT B1: Intentar crear movimiento de caja automático
+    // Regla: Solo crea si hay caja abierta, si no, el movimiento queda pendiente
+    try {
+      const { createCashMovementFromPayment } = await import("@/lib/cash-box-helpers");
+      const movementResult = await createCashMovementFromPayment(
+        params.id,
+        payment.sale_id,
+        payment.tenant_id
+      );
+      
+      if (movementResult.created) {
+        console.log(`[PATCH /api/payments/:id/confirm] Movimiento de caja creado: ${movementResult.movementId}`);
+      } else {
+        console.log(`[PATCH /api/payments/:id/confirm] Movimiento de caja no creado: ${movementResult.reason}`);
+      }
+    } catch (movementError) {
+      // No fallar si hay error al crear movimiento, solo loguear
+      // El pago ya está confirmado, el movimiento se puede crear después
+      console.warn("[PATCH /api/payments/:id/confirm] Error al crear movimiento de caja (no crítico):", movementError);
+    }
+
     // Obtener el pago completo con relación payment_methods
     const { data: paymentComplete, error: fetchError } = await supabase
       .from("payments")
