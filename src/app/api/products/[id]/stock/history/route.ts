@@ -10,9 +10,13 @@ const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
  */
 function normalizeStockMovement(movement: any) {
   return {
+    id: movement.id,
     quantity: movement.difference, // La diferencia es la cantidad (positiva o negativa)
+    stockBefore: movement.previous_stock,
     stockAfter: movement.new_stock, // Stock resultante después del movimiento
     reason: movement.reason || null,
+    purchaseId: movement.purchase_id || null, // SPRINT ERP: FK a purchases
+    saleId: movement.sale_id || null, // FK a sales
     createdAt: movement.created_at,
     // Nota: user no está en la BD actualmente, pero se puede agregar en el futuro
     // Por ahora, si se necesita, se puede obtener de los headers de la request

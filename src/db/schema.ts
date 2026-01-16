@@ -24,6 +24,7 @@ export const products = pgTable("products", {
   sku: text("sku").notNull(), // SPRINT 6: Ya no es único global, solo por store
   nameInternal: text("name_internal").notNull(),
   price: numeric("price").notNull(),
+  cost: numeric("cost"), // SPRINT ERP: Costo base del producto (nullable inicialmente)
   stock: integer("stock").default(0),
   // Posición manual para ordenar productos en la tienda / panel (SPRINT 9)
   position: integer("position").default(0),
@@ -72,6 +73,9 @@ export const stockMovements = pgTable("stock_movements", {
   newStock: integer("new_stock").notNull(),
   difference: integer("difference").notNull(), // positivo = entrada, negativo = salida
   reason: text("reason"), // "venta", "ajuste", "compra", etc.
+  // SPRINT ERP: Referencias opcionales para trazabilidad
+  purchaseId: uuid("purchase_id"), // FK a purchases (si el movimiento viene de una compra)
+  saleId: uuid("sale_id"), // FK a sales (si el movimiento viene de una venta)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -265,5 +269,48 @@ export const cashMovements = pgTable("cash_movements", {
   // Trazabilidad opcional
   paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }), // FK opcional a payments
   saleId: uuid("sale_id").references(() => sales.id, { onDelete: "set null" }), // FK opcional a sales
+  purchaseId: uuid("purchase_id"), // SPRINT ERP: FK opcional a purchases (para compras)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT ERP: Sistema de Proveedores
+export const suppliers = pgTable("suppliers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  notes: text("notes"), // Notas adicionales sobre el proveedor
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  deletedAt: timestamp("deleted_at"), // Soft delete
+});
+
+// SPRINT ERP: Sistema de Compras
+export const purchases = pgTable("purchases", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }).notNull(),
+  status: text("status").notNull().default("draft"), // 'draft' | 'confirmed' | 'received' | 'cancelled'
+  subtotal: numeric("subtotal").default("0"), // Subtotal sin impuestos
+  totalCost: numeric("total_cost").notNull().default("0"), // Costo total de la compra
+  notes: text("notes"), // Notas sobre la compra
+  createdBy: uuid("created_by").notNull(), // ID del usuario que creó la compra
+  confirmedAt: timestamp("confirmed_at"), // Fecha de confirmación
+  receivedAt: timestamp("received_at"), // Fecha de recepción (cuando se actualiza stock y costos)
+  cancelledAt: timestamp("cancelled_at"), // Fecha de cancelación
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT ERP: Items de Compra
+export const purchaseItems = pgTable("purchase_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  purchaseId: uuid("purchase_id").references(() => purchases.id, { onDelete: "cascade" }).notNull(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "restrict" }).notNull(),
+  variantId: uuid("variant_id").references(() => variants.id, { onDelete: "set null" }), // Nullable
+  quantity: integer("quantity").notNull(),
+  unitCost: numeric("unit_cost").notNull(), // Costo unitario de compra
+  totalCost: numeric("total_cost").notNull(), // quantity * unit_cost
   createdAt: timestamp("created_at").defaultNow(),
 });

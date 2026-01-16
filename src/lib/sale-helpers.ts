@@ -159,6 +159,7 @@ export async function getProductSnapshot(
 
 /**
  * Prepara los items de venta con snapshot y cálculos
+ * SPRINT ERP: Usa el costo del producto como default si no se proporciona unitCost
  */
 export async function prepareSaleItems(
   items: SaleItemInput[]
@@ -168,6 +169,20 @@ export async function prepareSaleItems(
   for (const item of items) {
     // Obtener snapshot del producto
     const snapshot = await getProductSnapshot(item.productId, item.variantId);
+
+    // SPRINT ERP: Obtener costo del producto si no se proporciona
+    let unitCost = item.unitCost;
+    if (!unitCost) {
+      const { data: product } = await supabase
+        .from("products")
+        .select("cost")
+        .eq("id", item.productId)
+        .single();
+      
+      if (product && product.cost) {
+        unitCost = product.cost;
+      }
+    }
 
     // Calcular subtotal del item
     const unitPrice = typeof item.unitPrice === "string" 
@@ -191,6 +206,7 @@ export async function prepareSaleItems(
       stockImpacted: 0, // Se actualizará cuando se confirme la venta
       unitTax: unitTax.toString(),
       unitDiscount: unitDiscount.toString(),
+      unitCost: unitCost, // SPRINT ERP: Incluir costo (del producto o proporcionado)
     });
   }
 
