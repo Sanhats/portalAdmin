@@ -101,8 +101,30 @@ export async function GET(
     const discounts = data.discounts ? parseFloat(data.discounts) : 0;
     const costAmount = data.cost_amount ? parseFloat(data.cost_amount) : 0;
     
+    // SPRINT G: Calcular margen total
+    const marginAmount = totalAmount - costAmount;
+    const marginPercent = totalAmount > 0 ? ((marginAmount / totalAmount) * 100) : 0;
+    
+    // SPRINT G: Calcular margen por item
+    const itemsWithMargin = (data.sale_items || []).map((item: any) => {
+      const unitPrice = parseFloat(item.unit_price || "0");
+      const unitCost = item.unit_cost ? parseFloat(item.unit_cost) : 0;
+      const quantity = item.quantity || 0;
+      const itemRevenue = unitPrice * quantity;
+      const itemCost = unitCost * quantity;
+      const itemMargin = itemRevenue - itemCost;
+      const itemMarginPercent = itemRevenue > 0 ? ((itemMargin / itemRevenue) * 100) : 0;
+      
+      return {
+        ...item,
+        itemMargin: Math.round(itemMargin * 100) / 100,
+        itemMarginPercent: Math.round(itemMarginPercent * 100) / 100,
+      };
+    });
+    
     const response = {
       ...data,
+      sale_items: itemsWithMargin, // Items con margen calculado
       financial: {
         subtotal: subtotal,
         taxes: taxes,
@@ -113,8 +135,12 @@ export async function GET(
         balanceAmount: balanceAmount,
         isPaid: balanceAmount <= 0,
         paymentCompletedAt: data.payment_completed_at || null,
-        margin: totalAmount - costAmount, // Margen calculado
-        marginPercentage: totalAmount > 0 ? ((totalAmount - costAmount) / totalAmount * 100) : 0,
+        // SPRINT G: Nombres normalizados para frontend
+        marginAmount: Math.round(marginAmount * 100) / 100,
+        marginPercent: Math.round(marginPercent * 100) / 100,
+        // Backward compatibility
+        margin: Math.round(marginAmount * 100) / 100,
+        marginPercentage: Math.round(marginPercent * 100) / 100,
       }
     };
     
