@@ -133,3 +133,68 @@ export async function getProductMargins(
 
   return reports;
 }
+
+export interface ProfitabilitySummary {
+  sales: number;
+  expenses: number;
+  netResult: number;
+}
+
+/**
+ * Obtiene el resumen de rentabilidad (Ingresos - Costos - Gastos)
+ * @param tenantId - ID del tenant
+ * @param startDate - Fecha de inicio (ISO string, opcional)
+ * @param endDate - Fecha de fin (ISO string, opcional)
+ */
+export async function getProfitabilitySummary(
+  tenantId: string,
+  startDate?: string,
+  endDate?: string
+): Promise<ProfitabilitySummary> {
+  // 1. Obtener ventas confirmadas/pagadas (Revenue y COGS)
+  let salesQuery = supabase
+    .from("sales")
+    .select("total_amount, cost_amount")
+    .eq("tenant_id", tenantId)
+    .in("status", ["confirmed", "paid"]);
+
+  if (startDate) {
+    salesQuery = salesQuery.gte("created_at", startDate);
+  }
+  if (endDate) {
+    salesQuery = salesQuery.lte("created_at", endDate);
+  }
+
+  const { data: sales, error: salesError } = await salesQuery;
+  if (salesError) throw salesError;
+
+  // 2. Obtener egresos (Gastos Operativos)
+  let expensesQuery = supabase
+    .from("expenses")
+    .select("amount")
+    .eq("tenant_id", tenantId);
+
+  if (startDate) {
+    expensesQuery = expensesQuery.gte("date", startDate);
+  }
+  if (endDate) {
+    expensesQuery = expensesQuery.lte("date", endDate);
+  }
+
+  const { data: expenses, error: expensesError } = await expensesQuery;
+  if (expensesError) throw expensesError;
+
+  // 3. Calcular totales
+  const totalRevenue = sales?.reduce((sum, s) => sum + parseFloat(s.total_amount || "0"), 0) || 0;
+  const totalCostOfSales = sales?.reduce((sum, s) => sum + parseFloat(s.cost_amount || "0"), 0) || 0;
+  const totalExpenses = expenses?.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0) || 0;
+
+  // Resultado Neto = (Revenue - COGS) - Expenses
+  const netResult = (totalRevenue - totalCostOfSales) - totalExpenses;
+
+  return {
+    sales: Math.round(totalRevenue * 100) / 100,
+    expenses: Math.round(totalExpenses * 100) / 100,
+    netResult: Math.round(netResult * 100) / 100,
+  };
+}

@@ -314,3 +314,14 @@ export const purchaseItems = pgTable("purchase_items", {
   totalCost: numeric("total_cost").notNull(), // quantity * unit_cost
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// SPRINT: Rentabilidad real & egresos mínimos
+export const expenses = pgTable("expenses", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  type: text("type").notNull(), // alquiler, servicios, proveedores, otros
+  amount: numeric("amount").notNull(),
+  date: timestamp("date").notNull(),
+  isRecurring: boolean("is_recurring").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
