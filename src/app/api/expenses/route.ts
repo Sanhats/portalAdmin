@@ -68,14 +68,19 @@ export async function GET(req: Request) {
     }
 
     // Formatear respuesta para coincidir con el formato esperado por el frontend
-    const formattedExpenses = (data || []).map((expense: any) => ({
-      id: expense.id,
-      type: expense.type,
-      amount: parseFloat(expense.amount || "0"),
-      date: expense.date ? new Date(expense.date).toISOString().split('T')[0], // YYYY-MM-DD
-      isRecurring: expense.is_recurring || false,
-      created_at: expense.created_at,
-    }));
+    const formattedExpenses = (data || []).map((expense: any) => {
+      // Formatear fecha a YYYY-MM-DD
+      const formattedDate = expense.date ? new Date(expense.date).toISOString().split('T')[0] : null;
+      
+      return {
+        id: expense.id,
+        type: expense.type,
+        amount: parseFloat(expense.amount || "0"),
+        date: formattedDate,
+        isRecurring: expense.is_recurring || false,
+        created_at: expense.created_at,
+      };
+    });
 
     return jsonResponse(formattedExpenses);
   } catch (error) {
@@ -155,11 +160,14 @@ export async function POST(req: Request) {
     }
 
     // Formatear respuesta para coincidir con el formato esperado por el frontend
+    // Formatear fecha a YYYY-MM-DD
+    const formattedDate = expense.date ? new Date(expense.date).toISOString().split('T')[0] : null;
+    
     const formattedExpense = {
       id: expense.id,
       type: expense.type,
       amount: parseFloat(expense.amount || "0"),
-      date: expense.date ? new Date(expense.date).toISOString().split('T')[0], // YYYY-MM-DD
+      date: formattedDate,
       isRecurring: expense.is_recurring || false,
       created_at: expense.created_at,
     };
