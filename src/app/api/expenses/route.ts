@@ -50,10 +50,14 @@ export async function GET(req: Request) {
       .order("date", { ascending: false });
 
     if (from) {
-      query = query.gte("date", from);
+      // Normalizar fecha de inicio (00:00:00)
+      const fromDate = new Date(from + "T00:00:00");
+      query = query.gte("date", fromDate.toISOString());
     }
     if (to) {
-      query = query.lte("date", to);
+      // Normalizar fecha de fin (23:59:59)
+      const toDate = new Date(to + "T23:59:59");
+      query = query.lte("date", toDate.toISOString());
     }
 
     const { data, error } = await query;
@@ -63,7 +67,17 @@ export async function GET(req: Request) {
       return errorResponse("Error al obtener egresos", 500, error.message, error.code);
     }
 
-    return jsonResponse(data || []);
+    // Formatear respuesta para coincidir con el formato esperado por el frontend
+    const formattedExpenses = (data || []).map((expense: any) => ({
+      id: expense.id,
+      type: expense.type,
+      amount: parseFloat(expense.amount || "0"),
+      date: expense.date ? new Date(expense.date).toISOString().split('T')[0], // YYYY-MM-DD
+      isRecurring: expense.is_recurring || false,
+      created_at: expense.created_at,
+    }));
+
+    return jsonResponse(formattedExpenses);
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/expenses");
   }
@@ -114,6 +128,14 @@ export async function POST(req: Request) {
 
     const { type, amount, date, isRecurring } = parsed.data;
 
+    // Normalizar fecha: si viene como string YYYY-MM-DD, convertir a Date
+    let dateToInsert: Date;
+    if (typeof date === 'string') {
+      dateToInsert = new Date(date + "T00:00:00");
+    } else {
+      dateToInsert = date;
+    }
+
     // Crear egreso
     const { data: expense, error: createError } = await supabase
       .from("expenses")
@@ -121,7 +143,7 @@ export async function POST(req: Request) {
         tenant_id: tenantId,
         type,
         amount: amount.toString(),
-        date: date.toISOString(),
+        date: dateToInsert.toISOString(),
         is_recurring: isRecurring || false,
       })
       .select()
@@ -132,7 +154,17 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear egreso", 500, createError.message, createError.code);
     }
 
-    return jsonResponse(expense, 201);
+    // Formatear respuesta para coincidir con el formato esperado por el frontend
+    const formattedExpense = {
+      id: expense.id,
+      type: expense.type,
+      amount: parseFloat(expense.amount || "0"),
+      date: expense.date ? new Date(expense.date).toISOString().split('T')[0], // YYYY-MM-DD
+      isRecurring: expense.is_recurring || false,
+      created_at: expense.created_at,
+    };
+
+    return jsonResponse(formattedExpense, 201);
   } catch (error) {
     return handleUnexpectedError(error, "POST /api/expenses");
   }

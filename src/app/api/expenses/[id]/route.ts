@@ -2,6 +2,10 @@ import { supabase } from "@/lib/supabase";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 
+import { z } from "zod";
+
+const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
+
 // DELETE /api/expenses/:id - Eliminar un egreso
 export async function DELETE(
   req: Request,
@@ -21,15 +25,43 @@ export async function DELETE(
       return errorResponse("No autorizado. Token inválido o expirado", 401);
     }
 
-    const { id } = params;
-
-    if (!id) {
-      return errorResponse("ID de egreso requerido", 400);
+    // Validar UUID
+    const uuidValidation = uuidSchema.safeParse(params.id);
+    if (!uuidValidation.success) {
+      return errorResponse("ID inválido", 400, uuidValidation.error.errors);
     }
 
-    // Opcional: Verificar que el egreso pertenece al tenant del usuario
-    // Para simplificar, asumimos que si tiene el ID correcto puede borrarlo
-    // ya que estamos en un contexto administrativo.
+    const { id } = params;
+
+    // Obtener tenantId del header para validar que el egreso pertenece al tenant
+    let tenantId = req.headers.get("x-tenant-id");
+    
+    if (!tenantId) {
+      const { data: defaultStore } = await supabase
+        .from("stores")
+        .select("id")
+        .eq("slug", "store-default")
+        .is("deleted_at", null)
+        .single();
+      
+      if (defaultStore) {
+        tenantId = defaultStore.id;
+      }
+    }
+
+    // Verificar que el egreso existe y pertenece al tenant
+    if (tenantId) {
+      const { data: expense, error: checkError } = await supabase
+        .from("expenses")
+        .select("id")
+        .eq("id", id)
+        .eq("tenant_id", tenantId)
+        .single();
+
+      if (checkError || !expense) {
+        return errorResponse("Egreso no encontrado o no pertenece al tenant", 404);
+      }
+    }
 
     const { error } = await supabase
       .from("expenses")
@@ -37,12 +69,12 @@ export async function DELETE(
       .eq("id", id);
 
     if (error) {
-      console.error("[DELETE /api/expenses] Error al eliminar egreso:", error);
+      console.error("[DELETE /api/expenses/:id] Error al eliminar egreso:", error);
       return errorResponse("Error al eliminar egreso", 500, error.message, error.code);
     }
 
     return jsonResponse({ message: "Egreso eliminado correctamente" });
   } catch (error) {
-    return handleUnexpectedError(error, "DELETE /api/expenses");
+    return handleUnexpectedError(error, "DELETE /api/expenses/:id");
   }
 }
