@@ -197,9 +197,9 @@ export async function PUT(
       return errorResponse("Venta no encontrada", 404);
     }
     
-    // SPRINT A: Validar que el estado permita edición
-    if (!isEditableStatus(existingSale.status as any)) {
-      return errorResponse(`Solo se pueden editar ventas en estado draft. Estado actual: ${existingSale.status}`, 400);
+    // SPRINT 4: Validar que el estado permita edición (solo draft)
+    if (existingSale.status !== "draft") {
+      return errorResponse(`No se puede modificar una venta con estado ${existingSale.status}. Solo se pueden modificar ventas en estado 'draft'`, 400);
     }
     
     // Obtener tenant_id del header si no está en la venta
@@ -262,17 +262,23 @@ export async function PUT(
         }
       }
       
+      // SPRINT A: Normalizar items (quantity debe ser number)
+      const normalizedItems = items.map(item => ({
+        ...item,
+        quantity: typeof item.quantity === "string" ? parseFloat(item.quantity) : item.quantity,
+      }));
+      
       // SPRINT A: Preparar items con snapshot y calcular totales
       let preparedItems;
       try {
-        preparedItems = await prepareSaleItems(items);
+        preparedItems = await prepareSaleItems(normalizedItems);
       } catch (snapshotError: any) {
         console.error("[PUT /api/sales/:id] Error al obtener snapshot:", snapshotError);
         return errorResponse("Error al obtener información de productos", 500, snapshotError.message);
       }
       
       // SPRINT A: Calcular totales
-      const totals = await calculateSaleTotals(items);
+      const totals = await calculateSaleTotals(normalizedItems);
       
       // Actualizar totales en la venta
       updateData.subtotal = totals.subtotal.toString();

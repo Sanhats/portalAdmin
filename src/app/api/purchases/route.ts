@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 import { createPurchaseSchema } from "@/validations/purchase";
-import { calculatePurchaseTotals, preparePurchaseItems } from "@/lib/purchase-helpers";
+import { createPurchaseWithTransaction } from "@/lib/purchase-helpers-sprint3";
 
 // GET /api/purchases - Listar compras
 export async function GET(req: Request) {
@@ -55,7 +55,7 @@ export async function GET(req: Request) {
     const status = searchParams.get("status");
     const supplierId = searchParams.get("supplierId");
 
-    // Construir query
+    // SPRINT 3: Construir query con nuevos campos
     let query = supabase
       .from("purchases")
       .select(`
@@ -63,6 +63,7 @@ export async function GET(req: Request) {
         suppliers (
           id,
           name,
+          contact_name,
           email,
           phone
         ),
@@ -72,7 +73,7 @@ export async function GET(req: Request) {
           variant_id,
           quantity,
           unit_cost,
-          total_cost,
+          subtotal,
           products (
             id,
             name_internal,
@@ -86,7 +87,7 @@ export async function GET(req: Request) {
         )
       `, { count: "exact" })
       .eq("tenant_id", tenantId)
-      .order("created_at", { ascending: false })
+      .order("purchase_date", { ascending: false }) // SPRINT 3: Ordenar por purchase_date
       .range(offset, offset + limit - 1);
 
     // Aplicar filtros
@@ -147,11 +148,16 @@ export async function POST(req: Request) {
         .is("deleted_at", null)
         .single();
       
-      if (!defaultStore) {
+      if (!defaultStore || !defaultStore.id) {
         return errorResponse("No se encontró store por defecto. Proporciona tenantId", 400);
       }
       
       tenantId = defaultStore.id;
+    }
+
+    // Validar que tenantId no sea null
+    if (!tenantId) {
+      return errorResponse("tenantId es requerido", 400);
     }
 
     // Validar datos
@@ -161,106 +167,62 @@ export async function POST(req: Request) {
       return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
 
-    // Verificar que el proveedor existe
-    const { data: supplier, error: supplierError } = await supabase
-      .from("suppliers")
-      .select("id, tenant_id")
-      .eq("id", parsed.data.supplierId)
-      .is("deleted_at", null)
-      .single();
+    // SPRINT 3: Crear compra con transacción completa usando helper
+    try {
+      const result = await createPurchaseWithTransaction(
+        tenantId,
+        parsed.data.supplierId,
+        parsed.data.purchaseDate,
+        parsed.data.invoiceNumber || null,
+        parsed.data.notes || null,
+        parsed.data.items
+      );
 
-    if (supplierError || !supplier) {
-      return errorResponse("Proveedor no encontrado", 404);
-    }
+      const purchase = result.purchase;
 
-    if (supplier.tenant_id !== tenantId) {
-      return errorResponse("El proveedor no pertenece al tenant", 403);
-    }
-
-    // Preparar items
-    const preparedItems = await preparePurchaseItems(parsed.data.items);
-    
-    // Calcular totales
-    const totals = await calculatePurchaseTotals(
-      parsed.data.items,
-      parsed.data.subtotal
-    );
-
-    // Crear compra
-    const { data: purchase, error: createError } = await supabase
-      .from("purchases")
-      .insert({
-        tenant_id: tenantId,
-        supplier_id: parsed.data.supplierId,
-        status: parsed.data.status || "draft",
-        subtotal: totals.subtotal.toString(),
-        total_cost: totals.totalCost.toString(),
-        notes: parsed.data.notes || null,
-        created_by: user.id,
-      })
-      .select()
-      .single();
-
-    if (createError) {
-      console.error("[POST /api/purchases] Error al crear compra:", createError);
-      return errorResponse("Error al crear compra", 500, createError.message, createError.code);
-    }
-
-    // Crear items de compra
-    const purchaseItems = preparedItems.map(item => ({
-      purchase_id: purchase.id,
-      product_id: item.productId,
-      variant_id: item.variantId || null,
-      quantity: item.quantity,
-      unit_cost: typeof item.unitCost === "string" ? item.unitCost : item.unitCost.toString(),
-      total_cost: item.totalCost.toString(),
-    }));
-
-    const { error: itemsError } = await supabase
-      .from("purchase_items")
-      .insert(purchaseItems);
-
-    if (itemsError) {
-      console.error("[POST /api/purchases] Error al crear items de compra:", itemsError);
-      // Intentar eliminar la compra creada
-      await supabase.from("purchases").delete().eq("id", purchase.id);
-      return errorResponse("Error al crear items de compra", 500, itemsError.message, itemsError.code);
-    }
-
-    // Obtener compra completa con relaciones
-    const { data: purchaseWithRelations } = await supabase
-      .from("purchases")
-      .select(`
-        *,
-        suppliers (
-          id,
-          name,
-          email,
-          phone
-        ),
-        purchase_items (
-          id,
-          product_id,
-          variant_id,
-          quantity,
-          unit_cost,
-          total_cost,
-          products (
-            id,
-            name_internal,
-            sku
-          ),
-          variants (
+      // Obtener compra completa con relaciones
+      const { data: purchaseWithRelations } = await supabase
+        .from("purchases")
+        .select(`
+          *,
+          suppliers (
             id,
             name,
-            value
+            contact_name,
+            email,
+            phone
+          ),
+          purchase_items (
+            id,
+            product_id,
+            variant_id,
+            quantity,
+            unit_cost,
+            subtotal,
+            products (
+              id,
+              name_internal,
+              sku
+            ),
+            variants (
+              id,
+              name,
+              value
+            )
           )
-        )
-      `)
-      .eq("id", purchase.id)
-      .single();
+        `)
+        .eq("id", purchase.id)
+        .single();
 
-    return jsonResponse(purchaseWithRelations, 201);
+      return jsonResponse(purchaseWithRelations, 201);
+    } catch (error: any) {
+      console.error("[POST /api/purchases] Error:", error);
+      return errorResponse(
+        error.message || "Error al crear compra",
+        500,
+        error.message
+      );
+    }
   } catch (error) {
     return handleUnexpectedError(error, "POST /api/purchases");
   }

@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
+import { cancelSale } from "@/lib/sale-helpers-sprint4";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid("El ID debe ser un UUID válido");
@@ -30,164 +31,60 @@ export async function POST(
       return errorResponse("ID inválido", 400, uuidValidation.error.errors);
     }
     
-    // SPRINT A: Obtener la venta con sus items incluyendo stock_impacted
-    const { data: sale, error: saleError } = await supabase
-      .from("sales")
-      .select(`
-        *,
-        sale_items (
-          id,
-          product_id,
-          variant_id,
-          quantity,
-          unit_price,
-          subtotal,
-          stock_impacted
-        )
-      `)
-      .eq("id", params.id)
-      .single();
+    // Obtener tenant_id
+    const { searchParams } = new URL(req.url);
+    let tenantId = searchParams.get("tenantId") || req.headers.get("x-tenant-id");
     
-    if (saleError || !sale) {
-      if (saleError?.code === "PGRST116") {
-        return errorResponse("Venta no encontrada", 404);
+    if (!tenantId) {
+      const { data: defaultStore } = await supabase
+        .from("stores")
+        .select("id")
+        .eq("slug", "store-default")
+        .is("deleted_at", null)
+        .single();
+      
+      if (!defaultStore) {
+        return errorResponse("No se encontró store por defecto. Proporciona tenantId", 400);
       }
-      console.error("[POST /api/sales/:id/cancel] Error al obtener venta:", saleError);
-      return errorResponse("Error al obtener la venta", 500, saleError?.message, saleError?.code);
+      
+      tenantId = defaultStore.id;
     }
     
-    // Validar que la venta se pueda cancelar
-    if (sale.status === "cancelled") {
-      return errorResponse("La venta ya está cancelada", 400);
+    if (!tenantId) {
+      return errorResponse("tenantId es requerido", 400);
     }
     
-    if (sale.status === "paid") {
-      return errorResponse("No se puede cancelar una venta pagada. Debe procesarse un reembolso primero", 400);
+    // SPRINT 4: Usar helper para cancelar venta
+    const result = await cancelSale(params.id, tenantId);
+    
+    if (!result.success) {
+      return errorResponse(result.error || "Error al cancelar la venta", 400);
     }
     
-    // Si la venta está confirmada, revertir el stock
-    if (sale.status === "confirmed") {
-      if (!sale.sale_items || sale.sale_items.length === 0) {
-        // Si no tiene items, solo cambiar el estado
-        const { data: updatedSale, error: updateError } = await supabase
-          .from("sales")
-          .update({ status: "cancelled" })
-          .eq("id", params.id)
-          .select()
-          .single();
-        
-        if (updateError || !updatedSale) {
-          console.error("[POST /api/sales/:id/cancel] Error al cancelar venta:", updateError);
-          return errorResponse("Error al cancelar la venta", 500, updateError?.message, updateError?.code);
-        }
-        
-        return jsonResponse(updatedSale);
-      }
-      
-      // Obtener todos los productos de la venta
-      const productIds = sale.sale_items.map((item: any) => item.product_id);
-      const { data: products, error: productsError } = await supabase
-        .from("products")
-        .select("id, stock, sku, name_internal")
-        .in("id", productIds)
-        .is("deleted_at", null);
-      
-      if (productsError) {
-        console.error("[POST /api/sales/:id/cancel] Error al obtener productos:", productsError);
-        return errorResponse("Error al validar productos", 500, productsError.message);
-      }
-      
-      if (!products || products.length !== productIds.length) {
-        // Algunos productos pueden haber sido eliminados, pero continuamos
-        console.warn("[POST /api/sales/:id/cancel] Algunos productos no se encontraron, continuando...");
-      }
-      
-      // SPRINT A: Revertir stock usando stock_impacted del snapshot
-      const stockUpdates: Array<{ productId: string; oldStock: number; newStock: number; quantity: number }> = [];
-      
-      for (const item of sale.sale_items) {
-        const product = products?.find(p => p.id === item.product_id);
-        if (!product) {
-          console.warn(`[POST /api/sales/:id/cancel] Producto ${item.product_id} no encontrado, saltando...`);
-          continue;
-        }
-        
-        const currentStock = product.stock || 0;
-        // SPRINT A: Usar stock_impacted del snapshot si está disponible, sino usar quantity
-        const quantityToRestore = item.stock_impacted > 0 ? item.stock_impacted : item.quantity;
-        const newStock = currentStock + quantityToRestore;
-        
-        stockUpdates.push({
-          productId: product.id,
-          oldStock: currentStock,
-          newStock: newStock,
-          quantity: quantityToRestore,
-        });
-      }
-      
-      // Actualizar stock y registrar movimientos
-      for (const update of stockUpdates) {
-        // Actualizar stock del producto
-        const { error: updateStockError } = await supabase
-          .from("products")
-          .update({ stock: update.newStock })
-          .eq("id", update.productId);
-        
-        if (updateStockError) {
-          console.error(`[POST /api/sales/:id/cancel] Error al revertir stock del producto ${update.productId}:`, updateStockError);
-          // Continuar con los demás productos
-          continue;
-        }
-        
-        // Registrar movimiento de stock
-        try {
-          await supabase
-            .from("stock_movements")
-            .insert({
-              product_id: update.productId,
-              previous_stock: update.oldStock,
-              new_stock: update.newStock,
-              difference: update.quantity, // Positivo porque es entrada (reversión)
-              reason: `Venta cancelada: ${params.id}`,
-            });
-        } catch (movementError) {
-          // No fallar si no se puede registrar el movimiento, solo loguear
-          console.warn(`[POST /api/sales/:id/cancel] No se pudo registrar movimiento de stock para producto ${update.productId}:`, movementError);
-        }
-      }
-    }
-    
-    // Actualizar estado de la venta a "cancelled"
-    const { data: updatedSale, error: updateSaleError } = await supabase
-      .from("sales")
-      .update({ status: "cancelled" })
-      .eq("id", params.id)
-      .select()
-      .single();
-    
-    if (updateSaleError || !updatedSale) {
-      console.error("[POST /api/sales/:id/cancel] Error al actualizar estado de la venta:", updateSaleError);
-      return errorResponse("Error al cancelar la venta", 500, updateSaleError?.message, updateSaleError?.code);
-    }
-    
-    // Obtener la venta completa con items
+    // Obtener la venta completa con items y customer
     const { data: saleWithItems, error: fetchError } = await supabase
       .from("sales")
       .select(`
         *,
+        customers:customer_id (
+          id,
+          name,
+          document,
+          email,
+          phone
+        ),
         sale_items (
           id,
           product_id,
           variant_id,
           quantity,
           unit_price,
-          subtotal,
+          total_price,
           products:product_id (
             id,
             sku,
             name_internal,
-            price,
-            stock
+            price
           ),
           variants:variant_id (
             id,
@@ -201,7 +98,7 @@ export async function POST(
     
     if (fetchError || !saleWithItems) {
       console.error("[POST /api/sales/:id/cancel] Error al obtener venta completa:", fetchError);
-      return jsonResponse(updatedSale);
+      return errorResponse("Error al obtener la venta cancelada", 500, fetchError?.message);
     }
     
     return jsonResponse(saleWithItems);

@@ -54,13 +54,21 @@ export async function GET(req: Request) {
     // Búsqueda
     const search = searchParams.get("search");
 
+    // SPRINT 3: Filtrar por is_active (soft delete)
+    const includeInactive = searchParams.get("includeInactive") === "true";
+    
     // Construir query
     let query = supabase
       .from("suppliers")
       .select("*", { count: "exact" })
-      .eq("tenant_id", tenantId)
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false })
+      .eq("tenant_id", tenantId);
+    
+    // SPRINT 3: Filtrar activos a menos que se solicite incluir inactivos
+    if (!includeInactive) {
+      query = query.eq("is_active", true);
+    }
+    
+    query = query.order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
     // Aplicar búsqueda si existe
@@ -132,15 +140,17 @@ export async function POST(req: Request) {
       return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
 
-    // Crear proveedor
+    // SPRINT 3: Crear proveedor con contact_name e is_active
     const { data: supplier, error: createError } = await supabase
       .from("suppliers")
       .insert({
         tenant_id: tenantId,
         name: parsed.data.name,
+        contact_name: parsed.data.contactName || null,
         email: parsed.data.email || null,
         phone: parsed.data.phone || null,
         notes: parsed.data.notes || null,
+        is_active: parsed.data.isActive ?? true,
       })
       .select()
       .single();

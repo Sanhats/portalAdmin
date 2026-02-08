@@ -180,6 +180,23 @@ export async function PUT(
     if (productData.categoryId !== undefined) {
       productUpdate.category_id = productData.categoryId || null;
     }
+    // SPRINT 1: Nuevos campos del núcleo comercial
+    if (productData.barcode !== undefined) {
+      productUpdate.barcode = productData.barcode || null;
+    }
+    if (productData.isWeighted !== undefined) {
+      productUpdate.is_weighted = productData.isWeighted;
+    }
+    if (productData.unit !== undefined) {
+      productUpdate.unit = productData.unit;
+    }
+    if (productData.cost !== undefined) {
+      productUpdate.cost = productData.cost 
+        ? (typeof productData.cost === "number" 
+            ? productData.cost.toString() 
+            : productData.cost)
+        : null;
+    }
 
     console.log("[PUT /api/products/[id]] Campos de producto a actualizar:", productUpdate);
     
@@ -408,6 +425,23 @@ export async function PATCH(
     if (productData.nameInternal !== undefined) productUpdate.name_internal = productData.nameInternal;
     if (productData.isActive !== undefined) productUpdate.is_active = productData.isActive;
     if (productData.isVisible !== undefined) productUpdate.is_visible = productData.isVisible;
+    // SPRINT 1: Nuevos campos del núcleo comercial
+    if (productData.barcode !== undefined) {
+      productUpdate.barcode = productData.barcode || null;
+    }
+    if (productData.isWeighted !== undefined) {
+      productUpdate.is_weighted = productData.isWeighted;
+    }
+    if (productData.unit !== undefined) {
+      productUpdate.unit = productData.unit;
+    }
+    if (productData.cost !== undefined) {
+      productUpdate.cost = productData.cost 
+        ? (typeof productData.cost === "number" 
+            ? productData.cost.toString() 
+            : productData.cost)
+        : null;
+    }
     // Si viene status directamente, mapear a is_active / is_visible
     if (status !== undefined) {
       if (status === "draft") {

@@ -40,6 +40,17 @@ export const productSprint1Schema = z.object({
     .nullable(),
   isActive: z.boolean().optional().default(true),
   isVisible: z.boolean().optional().default(false), // SPRINT 2: false por defecto (no publicado)
+  // SPRINT 1: Campos del núcleo comercial
+  barcode: z.string()
+    .max(100, "El código de barras no puede exceder 100 caracteres")
+    .optional()
+    .nullable(),
+  isWeighted: z.boolean().optional().default(false),
+  unit: z.enum(["unit", "kg", "g"]).optional().default("unit"),
+  cost: z.union([
+    z.string().regex(/^\d+(\.\d{1,2})?$/, "El costo debe ser un número válido"),
+    z.number().nonnegative("El costo debe ser un número no negativo")
+  ]).optional().nullable(),
 });
 
 // Esquema para crear producto (SPRINT 2 - Carga rápida)

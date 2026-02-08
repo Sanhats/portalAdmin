@@ -334,6 +334,15 @@ export async function POST(req: Request) {
         category_id: data.internal.categoryId || null,
         is_active: data.internal.isActive,
         is_visible: data.internal.isVisible,
+        // SPRINT 1: Nuevos campos del núcleo comercial
+        barcode: data.internal.barcode || null,
+        is_weighted: data.internal.isWeighted ?? false,
+        unit: data.internal.unit || "unit",
+        cost: data.internal.cost 
+          ? (typeof data.internal.cost === "number" 
+              ? data.internal.cost.toString() 
+              : data.internal.cost)
+          : null,
       };
     
       // Datos públicos (se insertarán en product_public_data)
@@ -368,12 +377,21 @@ export async function POST(req: Request) {
         price: typeof productData.price === "number" 
           ? productData.price.toString() 
           : productData.price,
-      stock: productData.stock ?? 0,
-      category_id: productData.categoryId || null,
+        stock: productData.stock ?? 0,
+        category_id: productData.categoryId || null,
         description: productData.description || null,
         is_active: productData.isActive ?? true,
         is_visible: productData.isVisible ?? false,
-    };
+        // SPRINT 1: Nuevos campos del núcleo comercial
+        barcode: productData.barcode || null,
+        is_weighted: productData.isWeighted ?? false,
+        unit: productData.unit || "unit",
+        cost: productData.cost 
+          ? (typeof productData.cost === "number" 
+              ? productData.cost.toString() 
+              : productData.cost)
+          : null,
+      };
     }
     
     console.log("[POST /api/products] Producto a insertar:", JSON.stringify(productToInsert, null, 2));

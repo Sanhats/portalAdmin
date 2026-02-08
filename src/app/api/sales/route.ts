@@ -3,6 +3,7 @@ import { createSaleSchema } from "@/validations/sale";
 import { jsonResponse, errorResponse, handleUnexpectedError, validatePagination } from "@/lib/api-response";
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 import { calculateSaleTotals, prepareSaleItems } from "@/lib/sale-helpers";
+import { calculateSaleTotals as calculateSaleTotalsSprint4, normalizeSaleDate } from "@/lib/sale-helpers-sprint4";
 import { SALE_STATUSES } from "@/lib/sale-constants";
 import { z } from "zod";
 
@@ -170,7 +171,39 @@ export async function POST(req: Request) {
       return errorResponse("Datos inválidos", 400, parsed.error.errors);
     }
     
-    const { items, paymentMethod, notes, status, subtotal, taxes, discounts } = parsed.data;
+    // SPRINT 4: Extraer campos del Sprint 4
+    const { 
+      items, 
+      customerId, 
+      date, 
+      discountPercentage, 
+      discountAmount,
+      notes, 
+      status,
+      // Backward compatibility
+      paymentMethod,
+      subtotal: subtotalInput,
+      taxes,
+      discounts
+    } = parsed.data;
+    
+    // SPRINT 4: Validar cliente si se proporciona
+    if (customerId) {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .select("id, active")
+        .eq("id", customerId)
+        .eq("tenant_id", tenantId)
+        .single();
+      
+      if (customerError || !customer) {
+        return errorResponse("Cliente no encontrado", 404);
+      }
+      
+      if (!customer.active) {
+        return errorResponse("El cliente está inactivo", 400);
+      }
+    }
     
     // Validar que todos los productos existan y estén activos
     const productIds = items.map(item => item.productId);
@@ -178,6 +211,7 @@ export async function POST(req: Request) {
       .from("products")
       .select("id, stock, is_active, price")
       .in("id", productIds)
+      .eq("store_id", tenantId)
       .is("deleted_at", null);
     
     if (productsError) {
@@ -227,37 +261,53 @@ export async function POST(req: Request) {
       }
     }
     
-    // SPRINT A: Preparar items con snapshot y calcular totales
-    let preparedItems;
-    try {
-      preparedItems = await prepareSaleItems(items);
-    } catch (snapshotError: any) {
-      console.error("[POST /api/sales] Error al obtener snapshot:", snapshotError);
-      return errorResponse("Error al obtener información de productos", 500, snapshotError.message);
-    }
+    // SPRINT 4: Normalizar items (convertir strings a números)
+    const normalizedItems = items.map(item => ({
+      productId: item.productId,
+      variantId: item.variantId || null,
+      quantity: typeof item.quantity === "string" ? parseFloat(item.quantity) : item.quantity,
+      unitPrice: typeof item.unitPrice === "string" ? parseFloat(item.unitPrice) : item.unitPrice,
+    }));
     
-    // SPRINT A: Calcular totales
-    const totals = await calculateSaleTotals(items, subtotal, taxes, discounts);
+    // SPRINT 4: Calcular totales usando helpers del Sprint 4
+    const discountPercentageNum = typeof discountPercentage === "string" 
+      ? parseFloat(discountPercentage) 
+      : (discountPercentage || 0);
+    const discountAmountNum = discountAmount 
+      ? (typeof discountAmount === "string" ? parseFloat(discountAmount) : discountAmount)
+      : undefined;
     
-    // Crear la venta con totales persistidos
-    const saleStatus = status || SALE_STATUSES.DRAFT;
+    const totals = calculateSaleTotalsSprint4(
+      normalizedItems.map(item => ({ quantity: item.quantity, unitPrice: item.unitPrice })),
+      discountPercentageNum,
+      discountAmountNum
+    );
+    
+    // SPRINT 4: Normalizar fecha
+    const normalizedDate = normalizeSaleDate(date);
+    
+    // SPRINT 4: Crear la venta con campos del Sprint 4 (estado draft por defecto)
+    const saleStatus = status || "draft";
     const { data: sale, error: saleError } = await supabase
       .from("sales")
       .insert({
         tenant_id: tenantId,
+        customer_id: customerId || null,
+        date: normalizedDate,
         status: saleStatus,
         subtotal: totals.subtotal.toString(),
-        taxes: totals.taxes.toString(),
-        discounts: totals.discounts.toString(),
-        total_amount: totals.totalAmount.toString(),
-        cost_amount: totals.costAmount.toString(),
-        payment_method: paymentMethod || null,
+        discount_percentage: discountPercentageNum.toString(),
+        discount_amount: totals.discountAmount.toString(),
+        total: totals.total.toString(),
         notes: notes || null,
-        created_by: user.id,
-        payment_status: null,
-        external_reference: null,
+        // Backward compatibility
+        payment_method: paymentMethod || null,
+        taxes: taxes ? (typeof taxes === "string" ? taxes : taxes.toString()) : "0",
+        discounts: totals.discountAmount.toString(),
+        total_amount: totals.total.toString(),
+        created_by: user?.id || null,
         paid_amount: "0",
-        balance_amount: totals.totalAmount.toString(),
+        balance_amount: totals.total.toString(),
       })
       .select()
       .single();
@@ -267,23 +317,21 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear la venta", 500, saleError?.message, saleError?.code);
     }
     
-    // SPRINT A: Crear los items de la venta con snapshot
-    const saleItemsWithSaleId = preparedItems.map(item => ({
-      sale_id: sale.id,
-      product_id: item.productId,
-      variant_id: item.variantId || null,
-      quantity: item.quantity,
-      product_name: item.productName,
-      product_sku: item.productSku,
-      variant_name: item.variantName || null,
-      variant_value: item.variantValue || null,
-      unit_price: (typeof item.unitPrice === "string" ? item.unitPrice : item.unitPrice.toString()),
-      unit_cost: item.unitCost ? (typeof item.unitCost === "string" ? item.unitCost : item.unitCost.toString()) : null,
-      unit_tax: item.unitTax || "0",
-      unit_discount: item.unitDiscount || "0",
-      subtotal: item.subtotal.toString(),
-      stock_impacted: item.stockImpacted,
-    }));
+    // SPRINT 4: Crear los items de la venta con total_price
+    const saleItemsWithSaleId = normalizedItems.map(item => {
+      const totalPrice = item.quantity * item.unitPrice;
+      return {
+        sale_id: sale.id,
+        product_id: item.productId,
+        variant_id: item.variantId,
+        quantity: item.quantity.toString(),
+        unit_price: item.unitPrice.toString(),
+        total_price: totalPrice.toString(),
+        // Backward compatibility
+        subtotal: totalPrice.toString(),
+        total: totalPrice.toString(),
+      };
+    });
     
     const { error: itemsError } = await supabase
       .from("sale_items")
@@ -296,26 +344,25 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear los items de la venta", 500, itemsError.message, itemsError.code);
     }
     
-    // SPRINT A: Obtener la venta completa con items y snapshot
+    // SPRINT 4: Obtener la venta completa con items y customer
     const { data: saleWithItems, error: fetchError } = await supabase
       .from("sales")
       .select(`
         *,
+        customers:customer_id (
+          id,
+          name,
+          document,
+          email,
+          phone
+        ),
         sale_items (
           id,
           product_id,
           variant_id,
           quantity,
           unit_price,
-          subtotal,
-          product_name,
-          product_sku,
-          variant_name,
-          variant_value,
-          unit_cost,
-          unit_tax,
-          unit_discount,
-          stock_impacted,
+          total_price,
           products:product_id (
             id,
             sku,

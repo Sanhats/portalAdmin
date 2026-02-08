@@ -73,6 +73,17 @@ export const productUpdateSchema = productSchema.partial().extend({
   isVisible: z.boolean().optional(),
   // Campo de estado opcional (frontend puede enviar status directamente)
   status: z.enum(["draft", "active", "hidden"]).optional(),
+  // SPRINT 1: Campos del núcleo comercial
+  barcode: z.string()
+    .max(100, "El código de barras no puede exceder 100 caracteres")
+    .optional()
+    .nullable(),
+  isWeighted: z.boolean().optional(),
+  unit: z.enum(["unit", "kg", "g"]).optional(),
+  cost: z.union([
+    z.string().regex(/^\d+(\.\d{1,2})?$/, "El costo debe ser un número válido"),
+    z.number().nonnegative("El costo debe ser un número no negativo")
+  ]).optional().nullable(),
   // Variantes e imágenes
   variants: z.array(variantSchema).optional(),
   images: z.array(productImageSchema).optional(),

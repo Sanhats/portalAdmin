@@ -38,6 +38,10 @@ export const products = pgTable("products", {
   slug: text("slug"),
   description: text("description"),
   isFeatured: boolean("is_featured").default(false),
+  // SPRINT 1: Campos requeridos para núcleo comercial
+  barcode: text("barcode"), // Código de barras (opcional)
+  isWeighted: boolean("is_weighted").default(false), // Producto a granel
+  unit: text("unit").default("unit"), // unit, kg, g
 });
 
 export const productImages = pgTable("product_images", {
@@ -65,35 +69,83 @@ export const productPublicData = pgTable("product_public_data", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// SPRINT 5: Tabla para registrar movimientos de stock (opcional, para ventas futuras)
+// SPRINT 1: Tabla de stock por producto
+export const productStock = pgTable("product_stock", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull().unique(),
+  stockCurrent: integer("stock_current").notNull().default(0),
+  stockMin: integer("stock_min").default(0),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT 1: Tabla para registrar movimientos de stock (auditables)
 export const stockMovements = pgTable("stock_movements", {
   id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
   productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
-  previousStock: integer("previous_stock").notNull(),
-  newStock: integer("new_stock").notNull(),
-  difference: integer("difference").notNull(), // positivo = entrada, negativo = salida
-  reason: text("reason"), // "venta", "ajuste", "compra", etc.
-  // SPRINT ERP: Referencias opcionales para trazabilidad
-  purchaseId: uuid("purchase_id"), // FK a purchases (si el movimiento viene de una compra)
-  saleId: uuid("sale_id"), // FK a sales (si el movimiento viene de una venta)
+  type: text("type").notNull(), // purchase, sale, adjustment, cancelation
+  quantity: integer("quantity").notNull(), // + / -
+  referenceId: uuid("reference_id"), // Opcional: referencia a purchase, sale, etc.
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT 1: Tabla de precios por lista (4 listas fijas)
+export const productPrices = pgTable("product_prices", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
+  priceListId: integer("price_list_id").notNull(), // 1, 2, 3, 4
+  price: numeric("price").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT 4: Clientes
+export const customers = pgTable("customers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  name: text("name").notNull(),
+  document: text("document"), // DNI / CUIT (opcional, único por tenant)
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  active: boolean("active").default(true), // Soft delete
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT 2: Vendedores
+export const sellers = pgTable("sellers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  name: text("name").notNull(),
+  active: boolean("active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // Sistema de Ventas: Tabla principal de ventas
 export const sales = pgTable("sales", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
-  // SPRINT A: Estados extendidos: draft | in_progress | confirmed | completed | cancelled | paid | refunded
-  status: text("status").notNull().default("draft"), 
-  // SPRINT A: Totales persistidos
-  subtotal: numeric("subtotal").default("0"), // Subtotal sin impuestos ni descuentos
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "set null" }), // SPRINT 4: Cliente (nullable → venta mostrador)
+  sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "restrict" }), // SPRINT 2: Vendedor (backward compatibility)
+  // SPRINT 4: Campos específicos
+  date: timestamp("date").notNull().defaultNow(), // SPRINT 4: Fecha de venta
+  subtotal: numeric("subtotal").notNull().default("0"), // SPRINT 4: Suma de ítems
+  discountPercentage: numeric("discount_percentage").default("0"), // SPRINT 4: Porcentaje de descuento
+  discountAmount: numeric("discount_amount").default("0"), // SPRINT 4: Monto de descuento (calculado)
+  total: numeric("total").notNull().default("0"), // SPRINT 4: subtotal - discount_amount
+  status: text("status").notNull().default("draft"), // SPRINT 4: draft | confirmed | cancelled
+  // SPRINT 2: Campos adicionales (backward compatibility)
+  discountTotal: numeric("discount_total").default("0"), // Alias de discount_amount
+  paymentMethod: text("payment_method"), // cash, card, transfer, mixed
+  cashReceived: numeric("cash_received"), // Efectivo recibido (nullable)
+  changeGiven: numeric("change_given"), // Vuelto dado (nullable)
   taxes: numeric("taxes").default("0"), // Total de impuestos
-  discounts: numeric("discounts").default("0"), // Total de descuentos
-  totalAmount: numeric("total_amount").notNull().default("0"), // Total final (subtotal + taxes - discounts)
+  discounts: numeric("discounts").default("0"), // Total de descuentos (alias)
+  totalAmount: numeric("total_amount").default("0"), // Total final (alias de total)
   costAmount: numeric("cost_amount").default("0"), // Costo total para cálculo de margen
-  paymentMethod: text("payment_method"), // cash | transfer | mercadopago | other (backward compatibility)
   notes: text("notes"),
-  createdBy: uuid("created_by").notNull(), // ID del usuario que creó la venta
+  createdBy: uuid("created_by"), // ID del usuario que creó la venta (backward compatibility)
   paymentStatus: text("payment_status"), // Preparado para Mercado Pago
   externalReference: text("external_reference"), // Preparado para Mercado Pago (vacío por ahora)
   // Campos financieros para snapshot
@@ -110,18 +162,21 @@ export const saleItems = pgTable("sale_items", {
   saleId: uuid("sale_id").references(() => sales.id, { onDelete: "cascade" }).notNull(),
   productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
   variantId: uuid("variant_id").references(() => variants.id, { onDelete: "set null" }), // Nullable
-  quantity: integer("quantity").notNull(),
+  // SPRINT 4: Campos requeridos
+  quantity: numeric("quantity").notNull(), // NUMERIC para soportar pesables
+  unitPrice: numeric("unit_price").notNull(), // Precio unitario al momento de la venta
+  totalPrice: numeric("total_price").notNull(), // SPRINT 4: quantity * unit_price
   // SPRINT A: Snapshot de producto al momento de la venta (inmutable)
   productName: text("product_name"), // Nombre del producto al momento de la venta
   productSku: text("product_sku"), // SKU del producto al momento de la venta
   variantName: text("variant_name"), // Nombre de la variante si aplica
   variantValue: text("variant_value"), // Valor de la variante si aplica
-  unitPrice: numeric("unit_price").notNull(), // Precio unitario al momento de la venta
   unitCost: numeric("unit_cost"), // Costo unitario al momento de la venta (para margen)
   unitTax: numeric("unit_tax").default("0"), // Impuesto unitario
   unitDiscount: numeric("unit_discount").default("0"), // Descuento unitario
-  subtotal: numeric("subtotal").notNull(), // Subtotal del item (quantity * unitPrice)
-  stockImpacted: integer("stock_impacted").notNull().default(0), // Cantidad de stock que se descontó
+  subtotal: numeric("subtotal"), // Backward compatibility (alias de total_price)
+  total: numeric("total"), // Backward compatibility (alias de total_price)
+  stockImpacted: numeric("stock_impacted").default("0"), // Cantidad de stock que se descontó (NUMERIC para pesables)
 });
 
 // Sistema de Métodos de Pago: Métodos configurables por comercio
@@ -245,7 +300,31 @@ export const paymentEvents = pgTable("payment_events", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// SPRINT B1: Sistema de Contabilidad Operativa - Cajas Diarias
+// SPRINT 2: Sistema de Caja - Sesiones de Caja
+export const cashSessions = pgTable("cash_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "restrict" }).notNull(),
+  openingAmount: numeric("opening_amount").notNull().default("0"),
+  closingAmount: numeric("closing_amount"), // Nullable hasta que se cierre
+  openedAt: timestamp("opened_at").defaultNow(),
+  closedAt: timestamp("closed_at"), // Nullable hasta que se cierre
+  status: text("status").notNull().default("open"), // 'open' | 'closed'
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT 2: Movimientos de Caja
+export const cashMovements = pgTable("cash_movements", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  cashSessionId: uuid("cash_session_id").references(() => cashSessions.id, { onDelete: "cascade" }).notNull(),
+  type: text("type").notNull(), // 'sale', 'refund', 'manual'
+  amount: numeric("amount").notNull(),
+  referenceId: uuid("reference_id"), // FK a sales.id si es sale/refund
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT B1: Sistema de Contabilidad Operativa - Cajas Diarias (backward compatibility)
 export const cashBoxes = pgTable("cash_boxes", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
@@ -257,8 +336,9 @@ export const cashBoxes = pgTable("cash_boxes", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// SPRINT B1: Sistema de Contabilidad Operativa - Movimientos de Caja
-export const cashMovements = pgTable("cash_movements", {
+// SPRINT B1: Sistema de Contabilidad Operativa - Movimientos de Caja (backward compatibility)
+// Nota: Esta tabla se mantiene para compatibilidad, pero el Sprint 2 usa cash_movements con cashSessionId
+export const cashBoxMovements = pgTable("cash_box_movements", {
   id: uuid("id").defaultRandom().primaryKey(),
   cashBoxId: uuid("cash_box_id").references(() => cashBoxes.id, { onDelete: "cascade" }).notNull(), // OBLIGATORIO
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
@@ -274,44 +354,52 @@ export const cashMovements = pgTable("cash_movements", {
 });
 
 // SPRINT ERP: Sistema de Proveedores
+// SPRINT 3: Proveedores
 export const suppliers = pgTable("suppliers", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
   name: text("name").notNull(),
+  contactName: text("contact_name"), // SPRINT 3: Nombre de contacto opcional
   email: text("email"),
   phone: text("phone"),
   notes: text("notes"), // Notas adicionales sobre el proveedor
+  isActive: boolean("is_active").default(true), // SPRINT 3: Soft delete con is_active
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-  deletedAt: timestamp("deleted_at"), // Soft delete
+  deletedAt: timestamp("deleted_at"), // Backward compatibility
 });
 
-// SPRINT ERP: Sistema de Compras
+// SPRINT 3: Sistema de Compras
 export const purchases = pgTable("purchases", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
   supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }).notNull(),
-  status: text("status").notNull().default("draft"), // 'draft' | 'confirmed' | 'received' | 'cancelled'
-  subtotal: numeric("subtotal").default("0"), // Subtotal sin impuestos
-  totalCost: numeric("total_cost").notNull().default("0"), // Costo total de la compra
+  invoiceNumber: text("invoice_number"), // SPRINT 3: Número de factura opcional
+  purchaseDate: timestamp("purchase_date").notNull(), // SPRINT 3: Fecha de compra
+  totalAmount: numeric("total_amount").notNull().default("0"), // SPRINT 3: Total de la compra
   notes: text("notes"), // Notas sobre la compra
-  createdBy: uuid("created_by").notNull(), // ID del usuario que creó la compra
-  confirmedAt: timestamp("confirmed_at"), // Fecha de confirmación
-  receivedAt: timestamp("received_at"), // Fecha de recepción (cuando se actualiza stock y costos)
-  cancelledAt: timestamp("cancelled_at"), // Fecha de cancelación
   createdAt: timestamp("created_at").defaultNow(),
+  // SPRINT 3: Campos adicionales para backward compatibility
+  status: text("status").default("confirmed"), // Backward compatibility
+  subtotal: numeric("subtotal").default("0"), // Backward compatibility
+  totalCost: numeric("total_cost").default("0"), // Backward compatibility (alias de total_amount)
+  createdBy: uuid("created_by"), // Backward compatibility
+  confirmedAt: timestamp("confirmed_at"), // Backward compatibility
+  receivedAt: timestamp("received_at"), // Backward compatibility
+  cancelledAt: timestamp("cancelled_at"), // Backward compatibility
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// SPRINT ERP: Items de Compra
+// SPRINT 3: Items de Compra
 export const purchaseItems = pgTable("purchase_items", {
   id: uuid("id").defaultRandom().primaryKey(),
   purchaseId: uuid("purchase_id").references(() => purchases.id, { onDelete: "cascade" }).notNull(),
   productId: uuid("product_id").references(() => products.id, { onDelete: "restrict" }).notNull(),
   variantId: uuid("variant_id").references(() => variants.id, { onDelete: "set null" }), // Nullable
-  quantity: integer("quantity").notNull(),
+  quantity: numeric("quantity").notNull(), // SPRINT 3: NUMERIC para soportar decimales
   unitCost: numeric("unit_cost").notNull(), // Costo unitario de compra
-  totalCost: numeric("total_cost").notNull(), // quantity * unit_cost
+  subtotal: numeric("subtotal").notNull(), // SPRINT 3: quantity * unit_cost
+  totalCost: numeric("total_cost"), // Backward compatibility (alias de subtotal)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -323,5 +411,71 @@ export const expenses = pgTable("expenses", {
   amount: numeric("amount").notNull(),
   date: timestamp("date").notNull(),
   isRecurring: boolean("is_recurring").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT 5: Cuentas Corrientes
+export const accounts = pgTable("accounts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  entityType: text("entity_type").notNull().default("customer"), // Solo 'customer' en este sprint
+  entityId: uuid("entity_id").notNull(), // FK a customers (o futuras entidades)
+  balance: numeric("balance").notNull().default("0"), // Solo informativo (cache)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT 5: Movimientos de Cuenta
+export const accountMovements = pgTable("account_movements", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }).notNull(),
+  type: text("type").notNull(), // 'debit' | 'credit'
+  amount: numeric("amount").notNull(),
+  referenceType: text("reference_type").notNull(), // 'sale' | 'payment' | 'adjustment' | 'sale_cancelation'
+  referenceId: uuid("reference_id"), // FK a sales, payments, etc.
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT 5: Pagos (versión simplificada para cuentas corrientes)
+export const paymentsSprint5 = pgTable("payments_sprint5", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }).notNull(),
+  saleId: uuid("sale_id").references(() => sales.id, { onDelete: "set null" }), // Opcional
+  amount: numeric("amount").notNull(),
+  method: text("method").notNull(), // 'cash' | 'transfer' | 'card' | 'other'
+  notes: text("notes"),
+  // SPRINT 6: Campos de caja
+  cashRegisterId: uuid("cash_register_id").references(() => cashRegisters.id, { onDelete: "restrict" }), // SPRINT 6: Caja asociada
+  sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "restrict" }), // SPRINT 6: Vendedor
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT 6: Caja (Cash Registers)
+export const cashRegisters = pgTable("cash_registers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "restrict" }).notNull(),
+  openedAt: timestamp("opened_at").notNull().defaultNow(),
+  closedAt: timestamp("closed_at"), // Nullable, se establece al cerrar
+  openingAmount: numeric("opening_amount").notNull().default("0"), // Monto inicial
+  closingAmount: numeric("closing_amount"), // Monto declarado al cerrar
+  status: text("status").notNull().default("open"), // 'open' | 'closed'
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// SPRINT 6: Cierres de Caja (Cash Closures)
+export const cashClosures = pgTable("cash_closures", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  cashRegisterId: uuid("cash_register_id").references(() => cashRegisters.id, { onDelete: "cascade" }).notNull(),
+  totalCash: numeric("total_cash").notNull().default("0"), // Total en efectivo
+  totalTransfer: numeric("total_transfer").notNull().default("0"), // Total en transferencias
+  totalCard: numeric("total_card").notNull().default("0"), // Total en tarjetas
+  totalOther: numeric("total_other").notNull().default("0"), // Total en otros métodos
+  totalIncome: numeric("total_income").notNull().default("0"), // Total de ingresos (suma de todos)
+  difference: numeric("difference").notNull().default("0"), // closing_amount - total_income
   createdAt: timestamp("created_at").defaultNow(),
 });

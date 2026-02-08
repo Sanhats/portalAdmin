@@ -47,12 +47,11 @@ export async function GET(
       }
     }
 
-    // Obtener proveedor
+    // SPRINT 3: Obtener proveedor (incluir inactivos para ver detalles)
     let query = supabase
       .from("suppliers")
       .select("*")
-      .eq("id", params.id)
-      .is("deleted_at", null);
+      .eq("id", params.id);
 
     if (tenantId) {
       query = query.eq("tenant_id", tenantId);
@@ -141,13 +140,16 @@ export async function PUT(
       return errorResponse("Proveedor no encontrado", 404);
     }
 
-    // Preparar datos de actualización
+    // SPRINT 3: Preparar datos de actualización
     const updateData: any = {
       updated_at: new Date().toISOString(),
     };
 
     if (parsed.data.name !== undefined) {
       updateData.name = parsed.data.name;
+    }
+    if (parsed.data.contactName !== undefined) {
+      updateData.contact_name = parsed.data.contactName;
     }
     if (parsed.data.email !== undefined) {
       updateData.email = parsed.data.email;
@@ -157,6 +159,9 @@ export async function PUT(
     }
     if (parsed.data.notes !== undefined) {
       updateData.notes = parsed.data.notes;
+    }
+    if (parsed.data.isActive !== undefined) {
+      updateData.is_active = parsed.data.isActive;
     }
 
     // Actualizar proveedor
@@ -219,12 +224,11 @@ export async function DELETE(
       }
     }
 
-    // Verificar que el proveedor existe y pertenece al tenant
+    // SPRINT 3: Verificar que el proveedor existe y pertenece al tenant
     let checkQuery = supabase
       .from("suppliers")
       .select("id")
-      .eq("id", params.id)
-      .is("deleted_at", null);
+      .eq("id", params.id);
 
     if (tenantId) {
       checkQuery = checkQuery.eq("tenant_id", tenantId);
@@ -247,10 +251,13 @@ export async function DELETE(
       return errorResponse("No se puede eliminar el proveedor porque tiene compras asociadas", 400);
     }
 
-    // Soft delete
+    // SPRINT 3: Soft delete con is_active = false
     const { error: deleteError } = await supabase
       .from("suppliers")
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ 
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", params.id);
 
     if (deleteError) {
