@@ -9,6 +9,16 @@ export const stores = pgTable("stores", {
   deletedAt: timestamp("deleted_at"), // Soft delete
 });
 
+// SPRINT 12: Tabla de branches (sucursales)
+export const branches = pgTable("branches", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  name: text("name").notNull(),
+  address: text("address"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const categories = pgTable("categories", {
   id: uuid("id").defaultRandom().primaryKey(),
   storeId: uuid("store_id").references(() => stores.id, { onDelete: "cascade" }), // SPRINT 6: Multi-tenant
@@ -82,6 +92,7 @@ export const productStock = pgTable("product_stock", {
 export const stockMovements = pgTable("stock_movements", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "restrict" }), // SPRINT 12: Sucursal
   productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
   type: text("type").notNull(), // purchase, sale, adjustment, cancelation
   quantity: integer("quantity").notNull(), // + / -
@@ -126,6 +137,7 @@ export const sellers = pgTable("sellers", {
 export const sales = pgTable("sales", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "restrict" }), // SPRINT 12: Sucursal
   customerId: uuid("customer_id").references(() => customers.id, { onDelete: "set null" }), // SPRINT 4: Cliente (nullable → venta mostrador)
   sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "restrict" }), // SPRINT 2: Vendedor (backward compatibility)
   // SPRINT 4: Campos específicos
@@ -228,6 +240,7 @@ export const payments = pgTable("payments", {
   id: uuid("id").defaultRandom().primaryKey(),
   saleId: uuid("sale_id").references(() => sales.id, { onDelete: "cascade" }).notNull(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "restrict" }), // SPRINT 12: Sucursal
   amount: numeric("amount").notNull(),
   // SPRINT 1: Método de pago unificado
   method: text("method"), // cash | transfer | mp_point | qr | card | other
@@ -373,6 +386,7 @@ export const suppliers = pgTable("suppliers", {
 export const purchases = pgTable("purchases", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(), // Multi-tenant
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "restrict" }), // SPRINT 12: Sucursal
   supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }).notNull(),
   invoiceNumber: text("invoice_number"), // SPRINT 3: Número de factura opcional
   purchaseDate: timestamp("purchase_date").notNull(), // SPRINT 3: Fecha de compra
@@ -442,6 +456,7 @@ export const accountMovements = pgTable("account_movements", {
 export const paymentsSprint5 = pgTable("payments_sprint5", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "restrict" }), // SPRINT 12: Sucursal
   customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }).notNull(),
   saleId: uuid("sale_id").references(() => sales.id, { onDelete: "set null" }), // Opcional
   amount: numeric("amount").notNull(),
@@ -457,6 +472,7 @@ export const paymentsSprint5 = pgTable("payments_sprint5", {
 export const cashRegisters = pgTable("cash_registers", {
   id: uuid("id").defaultRandom().primaryKey(),
   tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "restrict" }), // SPRINT 12: Sucursal
   sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "restrict" }).notNull(),
   openedAt: timestamp("opened_at").notNull().defaultNow(),
   closedAt: timestamp("closed_at"), // Nullable, se establece al cerrar

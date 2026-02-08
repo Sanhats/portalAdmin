@@ -14,11 +14,13 @@ export interface CashTotals {
 }
 
 /**
- * Abre una caja para un vendedor
+ * Abre una caja para un vendedor en una sucursal
+ * SPRINT 12: Ahora requiere branchId - un vendedor puede tener 1 caja abierta por sucursal
  */
 export async function openCashRegister(
   sellerId: string,
   tenantId: string,
+  branchId: string,
   openingAmount: number = 0
 ): Promise<{ cashRegisterId: string; error?: string }> {
   // Validar que el vendedor existe y está activo
@@ -37,17 +39,34 @@ export async function openCashRegister(
     return { cashRegisterId: "", error: "El vendedor está inactivo" };
   }
 
-  // Validar que no haya caja abierta para este vendedor
+  // SPRINT 12: Validar que la sucursal existe y está activa
+  const { data: branch, error: branchError } = await supabase
+    .from("branches")
+    .select("id, active")
+    .eq("id", branchId)
+    .eq("tenant_id", tenantId)
+    .single();
+
+  if (branchError || !branch) {
+    return { cashRegisterId: "", error: "Sucursal no encontrada" };
+  }
+
+  if (!branch.active) {
+    return { cashRegisterId: "", error: "La sucursal está inactiva" };
+  }
+
+  // SPRINT 12: Validar que no haya caja abierta para este vendedor EN ESTA SUCURSAL
   const { data: existingCashRegister } = await supabase
     .from("cash_registers")
     .select("id")
     .eq("tenant_id", tenantId)
     .eq("seller_id", sellerId)
+    .eq("branch_id", branchId)
     .eq("status", "open")
     .single();
 
   if (existingCashRegister) {
-    return { cashRegisterId: "", error: "Ya existe una caja abierta para este vendedor" };
+    return { cashRegisterId: "", error: "Ya existe una caja abierta para este vendedor en esta sucursal" };
   }
 
   // Crear nueva caja
@@ -55,6 +74,7 @@ export async function openCashRegister(
     .from("cash_registers")
     .insert({
       tenant_id: tenantId,
+      branch_id: branchId,
       seller_id: sellerId,
       opening_amount: openingAmount.toString(),
       status: "open",
@@ -70,17 +90,20 @@ export async function openCashRegister(
 }
 
 /**
- * Obtiene la caja abierta de un vendedor
+ * Obtiene la caja abierta de un vendedor en una sucursal
+ * SPRINT 12: Ahora requiere branchId
  */
 export async function getOpenCashRegister(
   sellerId: string,
-  tenantId: string
+  tenantId: string,
+  branchId: string
 ): Promise<{ cashRegister: any | null; error?: string }> {
   const { data: cashRegister, error } = await supabase
     .from("cash_registers")
     .select("*")
     .eq("tenant_id", tenantId)
     .eq("seller_id", sellerId)
+    .eq("branch_id", branchId)
     .eq("status", "open")
     .single();
 
@@ -227,20 +250,22 @@ export async function closeCashRegister(
 
 /**
  * Valida que un pago pueda asociarse a una caja
+ * SPRINT 12: Ahora requiere branchId
  */
 export async function validatePaymentCashRegister(
   sellerId: string,
-  tenantId: string
+  tenantId: string,
+  branchId: string
 ): Promise<{ valid: boolean; cashRegisterId?: string; error?: string }> {
-  // Obtener caja abierta del vendedor
-  const { cashRegister, error } = await getOpenCashRegister(sellerId, tenantId);
+  // Obtener caja abierta del vendedor en la sucursal
+  const { cashRegister, error } = await getOpenCashRegister(sellerId, tenantId, branchId);
 
   if (error) {
     return { valid: false, error };
   }
 
   if (!cashRegister) {
-    return { valid: false, error: "No hay caja abierta para este vendedor" };
+    return { valid: false, error: "No hay caja abierta para este vendedor en esta sucursal" };
   }
 
   return { valid: true, cashRegisterId: cashRegister.id };

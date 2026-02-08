@@ -11,6 +11,7 @@ export interface ReportFilters {
   endDate?: string;
   sellerId?: string;
   customerId?: string;
+  branchId?: string; // SPRINT 12: Filtro opcional por sucursal
 }
 
 export interface SalesSummary {
@@ -102,6 +103,10 @@ export async function getSalesSummary(
   if (filters.customerId) {
     query = query.eq("customer_id", filters.customerId);
   }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    query = query.eq("branch_id", filters.branchId);
+  }
 
   const { data: sales, error } = await query;
 
@@ -178,6 +183,10 @@ export async function getSalesByVendor(
   if (filters.sellerId) {
     salesQuery = salesQuery.eq("seller_id", filters.sellerId);
   }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    salesQuery = salesQuery.eq("branch_id", filters.branchId);
+  }
 
   const { data: sales, error: salesError } = await salesQuery;
 
@@ -193,6 +202,10 @@ export async function getSalesByVendor(
 
   if (filters.sellerId) {
     paymentsQuery = paymentsQuery.eq("seller_id", filters.sellerId);
+  }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    paymentsQuery = paymentsQuery.eq("branch_id", filters.branchId);
   }
 
   const { data: payments, error: paymentsError } = await paymentsQuery;
@@ -276,6 +289,10 @@ export async function getSalesByCategory(
   }
   if (endDate) {
     salesQuery = salesQuery.lte("date", endDate);
+  }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    salesQuery = salesQuery.eq("branch_id", filters.branchId);
   }
 
   const { data: sales, error: salesError } = await salesQuery;
@@ -410,6 +427,10 @@ export async function getSalesTickets(
   if (filters.customerId) {
     query = query.eq("customer_id", filters.customerId);
   }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    query = query.eq("branch_id", filters.branchId);
+  }
 
   query = query.order("date", { ascending: false });
 
@@ -442,6 +463,10 @@ export async function getProfitReport(
   }
   if (endDate) {
     salesQuery = salesQuery.lte("date", endDate);
+  }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    salesQuery = salesQuery.eq("branch_id", filters.branchId);
   }
 
   const { data: sales, error: salesError } = await salesQuery;
@@ -526,6 +551,10 @@ export async function getStockAudit(
   if (endDate) {
     query = query.lte("created_at", endDate);
   }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    query = query.eq("branch_id", filters.branchId);
+  }
 
   query = query.order("created_at", { ascending: false });
 
@@ -566,7 +595,7 @@ export async function getReplenishmentReport(
   }
 
   // Obtener compras recientes para determinar proveedor
-  const { data: purchases, error: purchasesError } = await supabase
+  let purchasesQuery = supabase
     .from("purchases")
     .select(`
       id,
@@ -579,7 +608,14 @@ export async function getReplenishmentReport(
         product_id
       )
     `)
-    .eq("tenant_id", filters.tenantId)
+    .eq("tenant_id", filters.tenantId);
+  
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    purchasesQuery = purchasesQuery.eq("branch_id", filters.branchId);
+  }
+  
+  const { data: purchases, error: purchasesError } = await purchasesQuery
     .order("purchase_date", { ascending: false })
     .limit(1000); // Últimas 1000 compras
 
@@ -687,6 +723,10 @@ export async function getCancelledSales(
   }
   if (filters.customerId) {
     query = query.eq("customer_id", filters.customerId);
+  }
+  // SPRINT 12: Filtro por sucursal
+  if (filters.branchId) {
+    query = query.eq("branch_id", filters.branchId);
   }
 
   query = query.order("updated_at", { ascending: false });

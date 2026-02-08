@@ -57,8 +57,14 @@ export async function POST(req: Request) {
       return errorResponse("tenantId es requerido", 400);
     }
 
+    // SPRINT 12: Validar branchId
+    const branchId = body.branchId || parsed.data.branchId;
+    if (!branchId) {
+      return errorResponse("branchId es requerido (SPRINT 12)", 400);
+    }
+
     // Abrir caja
-    const result = await openCashRegister(parsed.data.sellerId, tenantId, openingAmount);
+    const result = await openCashRegister(parsed.data.sellerId, tenantId, branchId, openingAmount);
     
     if (!result.cashRegisterId) {
       return errorResponse(result.error || "Error al abrir caja", 400);
@@ -105,6 +111,7 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const sellerId = searchParams.get("sellerId");
+    const branchId = searchParams.get("branchId");
     const tenantId = searchParams.get("tenantId") || req.headers.get("x-tenant-id");
 
     if (!tenantId) {
@@ -115,14 +122,19 @@ export async function GET(req: Request) {
       return errorResponse("sellerId es requerido", 400);
     }
 
-    // Validar que sellerId y tenantId no sean null
-    if (!sellerId || !tenantId) {
-      return errorResponse("sellerId y tenantId son requeridos", 400);
+    // SPRINT 12: branchId es requerido
+    if (!branchId) {
+      return errorResponse("branchId es requerido (SPRINT 12)", 400);
+    }
+
+    // Validar que sellerId, tenantId y branchId no sean null
+    if (!sellerId || !tenantId || !branchId) {
+      return errorResponse("sellerId, tenantId y branchId son requeridos", 400);
     }
 
     // Obtener caja abierta
     const { getOpenCashRegister } = await import("@/lib/cash-helpers-sprint6");
-    const { cashRegister, error } = await getOpenCashRegister(sellerId, tenantId);
+    const { cashRegister, error } = await getOpenCashRegister(sellerId, tenantId, branchId);
 
     if (error) {
       return errorResponse(error, 500);

@@ -102,8 +102,14 @@ export async function POST(req: Request) {
       return errorResponse("tenantId es requerido", 400);
     }
 
-    // SPRINT 6: Validar que haya caja abierta para el vendedor
-    const cashValidation = await validatePaymentCashRegister(parsed.data.sellerId, tenantId);
+    // SPRINT 12: Validar branchId
+    const branchId = body.branchId || parsed.data.branchId;
+    if (!branchId) {
+      return errorResponse("branchId es requerido (SPRINT 12)", 400);
+    }
+
+    // SPRINT 6: Validar que haya caja abierta para el vendedor en la sucursal
+    const cashValidation = await validatePaymentCashRegister(parsed.data.sellerId, tenantId, branchId);
     if (!cashValidation.valid) {
       return errorResponse(cashValidation.error || "No se puede registrar pago sin caja abierta", 400);
     }
@@ -113,6 +119,7 @@ export async function POST(req: Request) {
       .from("payments_sprint5")
       .insert({
         tenant_id: tenantId,
+        branch_id: branchId, // SPRINT 12: Sucursal
         customer_id: parsed.data.customerId,
         sale_id: parsed.data.saleId || null,
         amount: amount.toString(),
