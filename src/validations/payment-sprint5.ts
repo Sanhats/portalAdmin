@@ -25,4 +25,7 @@ export const createPaymentSchema = z.object({
   // SPRINT 6: Campos de caja
   sellerId: z.string()
     .uuid("El sellerId debe ser un UUID válido"), // SPRINT 6: Requerido para asociar a caja
+  // SPRINT 12: Sucursal
+  branchId: z.string()
+    .uuid("El branchId debe ser un UUID válido"), // SPRINT 12: Requerido
 });
