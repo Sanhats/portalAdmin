@@ -38,13 +38,24 @@ export async function POST(req: Request) {
       return errorResponse("tenantId es requerido (body o header x-tenant-id)", 400);
     }
 
+    // Preparar datos para insertar (mapear is_active a active si viene en el body)
+    const insertData: any = {
+      tenant_id: tenantId,
+      name: parsed.data.name,
+      active: parsed.data.active ?? parsed.data.is_active ?? true,
+    };
+
+    // Si viene email o role en el body, agregarlos
+    if ('email' in parsed.data && parsed.data.email) {
+      insertData.email = parsed.data.email;
+    }
+    if ('role' in parsed.data && parsed.data.role) {
+      insertData.role = parsed.data.role;
+    }
+
     const { data, error } = await supabase
       .from("sellers")
-      .insert({
-        tenant_id: tenantId,
-        name: parsed.data.name,
-        active: parsed.data.active ?? true,
-      })
+      .insert(insertData)
       .select()
       .single();
 
@@ -53,7 +64,20 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear vendedor", 500, error.message, error.code);
     }
 
-    return jsonResponse(data, 201);
+    // Mapear respuesta para incluir todos los campos requeridos
+    const seller = {
+      id: data.id,
+      tenant_id: data.tenant_id,
+      name: data.name,
+      email: data.email || null,
+      role: data.role || null,
+      is_active: data.active ?? true,
+      active: data.active ?? true,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    };
+
+    return jsonResponse(seller, 201);
   } catch (error) {
     return handleUnexpectedError(error, "POST /api/users");
   }

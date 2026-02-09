@@ -43,7 +43,20 @@ export async function GET(req: Request) {
       return errorResponse("Error al obtener vendedores", 500, error.message, error.code);
     }
 
-    return jsonResponse(data || []);
+    // Mapear respuesta para incluir todos los campos requeridos
+    const sellers = (data || []).map((seller: any) => ({
+      id: seller.id,
+      tenant_id: seller.tenant_id,
+      name: seller.name,
+      email: seller.email || null,
+      role: seller.role || null,
+      is_active: seller.active ?? true,
+      active: seller.active ?? true,
+      created_at: seller.created_at,
+      updated_at: seller.updated_at,
+    }));
+
+    return jsonResponse(sellers);
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/sellers");
   }
@@ -79,13 +92,24 @@ export async function POST(req: Request) {
       return errorResponse("tenantId es requerido (body o header x-tenant-id)", 400);
     }
 
+    // Preparar datos para insertar
+    const insertData: any = {
+      tenant_id: tenantId,
+      name: parsed.data.name,
+      active: parsed.data.active ?? parsed.data.is_active ?? true,
+    };
+
+    // Si viene email o role en el body, agregarlos
+    if (parsed.data.email) {
+      insertData.email = parsed.data.email;
+    }
+    if (parsed.data.role) {
+      insertData.role = parsed.data.role;
+    }
+
     const { data, error } = await supabase
       .from("sellers")
-      .insert({
-        tenant_id: tenantId,
-        name: parsed.data.name,
-        active: parsed.data.active ?? true,
-      })
+      .insert(insertData)
       .select()
       .single();
 
@@ -94,7 +118,20 @@ export async function POST(req: Request) {
       return errorResponse("Error al crear vendedor", 500, error.message, error.code);
     }
 
-    return jsonResponse(data, 201);
+    // Mapear respuesta para incluir todos los campos requeridos
+    const seller = {
+      id: data.id,
+      tenant_id: data.tenant_id,
+      name: data.name,
+      email: data.email || null,
+      role: data.role || null,
+      is_active: data.active ?? true,
+      active: data.active ?? true,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    };
+
+    return jsonResponse(seller, 201);
   } catch (error) {
     return handleUnexpectedError(error, "POST /api/sellers");
   }

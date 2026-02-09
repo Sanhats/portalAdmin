@@ -50,7 +50,20 @@ export async function GET(
       return errorResponse("Error al obtener vendedor", 500, error.message, error.code);
     }
 
-    return jsonResponse(data);
+    // Mapear respuesta para incluir todos los campos requeridos
+    const seller = {
+      id: data.id,
+      tenant_id: data.tenant_id,
+      name: data.name,
+      email: data.email || null, // Campo opcional, puede no existir en BD
+      role: data.role || null, // Campo opcional, puede no existir en BD
+      is_active: data.active ?? true, // Mapear 'active' a 'is_active'
+      active: data.active ?? true, // Mantener 'active' para compatibilidad
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    };
+
+    return jsonResponse(seller);
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/users/:id");
   }
@@ -97,12 +110,21 @@ export async function PUT(
       return errorResponse("Vendedor no encontrado", 404);
     }
 
+    // Preparar datos para actualizar (mapear is_active a active si viene en el body)
+    const updateData: any = {
+      ...parsed.data,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Si viene is_active en el body, mapearlo a active
+    if ('is_active' in parsed.data) {
+      updateData.active = parsed.data.is_active;
+      delete updateData.is_active;
+    }
+
     const { data, error } = await supabase
       .from("sellers")
-      .update({
-        ...parsed.data,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updateData)
       .eq("id", params.id)
       .select()
       .single();
@@ -112,7 +134,20 @@ export async function PUT(
       return errorResponse("Error al actualizar vendedor", 500, error.message, error.code);
     }
 
-    return jsonResponse(data);
+    // Mapear respuesta para incluir todos los campos requeridos
+    const seller = {
+      id: data.id,
+      tenant_id: data.tenant_id,
+      name: data.name,
+      email: data.email || null,
+      role: data.role || null,
+      is_active: data.active ?? true,
+      active: data.active ?? true,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+    };
+
+    return jsonResponse(seller);
   } catch (error) {
     return handleUnexpectedError(error, "PUT /api/users/:id");
   }

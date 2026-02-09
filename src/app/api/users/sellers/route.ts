@@ -41,7 +41,20 @@ export async function GET(req: Request) {
       return errorResponse("Error al obtener vendedores", 500, error.message, error.code);
     }
 
-    return jsonResponse(data || []);
+    // Mapear respuesta para incluir todos los campos requeridos
+    const sellers = (data || []).map((seller: any) => ({
+      id: seller.id,
+      tenant_id: seller.tenant_id,
+      name: seller.name,
+      email: seller.email || null, // Campo opcional, puede no existir en BD
+      role: seller.role || null, // Campo opcional, puede no existir en BD
+      is_active: seller.active ?? true, // Mapear 'active' a 'is_active'
+      active: seller.active ?? true, // Mantener 'active' para compatibilidad
+      created_at: seller.created_at,
+      updated_at: seller.updated_at,
+    }));
+
+    return jsonResponse(sellers);
   } catch (error) {
     return handleUnexpectedError(error, "GET /api/users/sellers");
   }
