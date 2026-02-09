@@ -163,14 +163,18 @@ export function calculateSaleTotals(
 
 /**
  * Crea movimientos de stock para una venta confirmada
+ * SPRINT 12: Ahora requiere branchId
+ * SPRINT 13: El trigger detectará alertas automáticamente
  */
 export async function createStockMovementsForSale(
   tenantId: string,
   saleId: string,
+  branchId: string,
   items: Array<{ productId: string; quantity: number }>
 ): Promise<void> {
   const movements = items.map((item) => ({
     tenant_id: tenantId,
+    branch_id: branchId, // SPRINT 12: Sucursal
     product_id: item.productId,
     type: "sale",
     quantity: -Math.abs(item.quantity), // Negativo para salida
@@ -192,10 +196,12 @@ export async function createStockMovementsForSale(
 export async function createStockMovementsForCancelation(
   tenantId: string,
   saleId: string,
+  branchId: string,
   items: Array<{ productId: string; quantity: number }>
 ): Promise<void> {
   const movements = items.map((item) => ({
     tenant_id: tenantId,
+    branch_id: branchId, // SPRINT 12: Sucursal
     product_id: item.productId,
     type: "cancelation",
     quantity: Math.abs(item.quantity), // Positivo para entrada (reversión)
@@ -213,6 +219,8 @@ export async function createStockMovementsForCancelation(
 
 /**
  * Confirma una venta (cambia estado a confirmed y genera movimientos de stock)
+ * SPRINT 12: Ahora requiere branchId de la venta
+ * SPRINT 13: El trigger detectará alertas automáticamente
  */
 export async function confirmSale(
   saleId: string,
@@ -221,7 +229,7 @@ export async function confirmSale(
   // 1. Obtener la venta y validar estado
   const { data: sale, error: saleError } = await supabase
     .from("sales")
-    .select("id, status, tenant_id")
+    .select("id, status, tenant_id, branch_id")
     .eq("id", saleId)
     .eq("tenant_id", tenantId)
     .single();
@@ -235,6 +243,11 @@ export async function confirmSale(
       success: false, 
       error: `No se puede confirmar una venta con estado ${sale.status}. Solo se pueden confirmar ventas en estado 'draft'` 
     };
+  }
+
+  // SPRINT 12: Validar branch_id
+  if (!sale.branch_id) {
+    return { success: false, error: "La venta debe tener una sucursal asignada (branch_id)" };
   }
 
   // 2. Obtener items de la venta
@@ -260,7 +273,7 @@ export async function confirmSale(
 
   // 4. Crear movimientos de stock
   try {
-    await createStockMovementsForSale(tenantId, saleId, normalizedItems);
+    await createStockMovementsForSale(tenantId, saleId, sale.branch_id, normalizedItems);
   } catch (stockError: any) {
     return { success: false, error: `Error al crear movimientos de stock: ${stockError.message}` };
   }
@@ -312,7 +325,7 @@ export async function cancelSale(
   // 1. Obtener la venta y validar estado
   const { data: sale, error: saleError } = await supabase
     .from("sales")
-    .select("id, status, tenant_id")
+    .select("id, status, tenant_id, branch_id")
     .eq("id", saleId)
     .eq("tenant_id", tenantId)
     .single();
@@ -344,8 +357,13 @@ export async function cancelSale(
     quantity: parseFloat(item.quantity || "0"),
   }));
 
+  // SPRINT 12: Validar branch_id
+  if (!sale.branch_id) {
+    return { success: false, error: "La venta debe tener una sucursal asignada (branch_id)" };
+  }
+
   try {
-    await createStockMovementsForCancelation(tenantId, saleId, normalizedItems);
+    await createStockMovementsForCancelation(tenantId, saleId, sale.branch_id, normalizedItems);
   } catch (stockError: any) {
     return { success: false, error: `Error al crear movimientos de cancelación: ${stockError.message}` };
   }

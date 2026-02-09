@@ -88,6 +88,33 @@ export const productStock = pgTable("product_stock", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// SPRINT 13: Tabla de configuración de stock por producto y sucursal
+export const productStockBranches = pgTable("product_stock_branches", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "cascade" }).notNull(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
+  minStock: integer("min_stock"),
+  idealStock: integer("ideal_stock"),
+  reorderEnabled: boolean("reorder_enabled").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// SPRINT 13: Tabla de alertas de stock
+export const stockAlerts = pgTable("stock_alerts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").references(() => stores.id, { onDelete: "cascade" }).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "cascade" }).notNull(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "cascade" }).notNull(),
+  currentStock: integer("current_stock").notNull(),
+  minStock: integer("min_stock").notNull(),
+  alertType: text("alert_type").notNull(), // LOW_STOCK | OUT_OF_STOCK
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE | RESOLVED
+  createdAt: timestamp("created_at").defaultNow(),
+  resolvedAt: timestamp("resolved_at"),
+});
+
 // SPRINT 1: Tabla para registrar movimientos de stock (auditables)
 export const stockMovements = pgTable("stock_movements", {
   id: uuid("id").defaultRandom().primaryKey(),

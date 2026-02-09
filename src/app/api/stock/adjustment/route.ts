@@ -9,8 +9,10 @@ import { jsonResponse, errorResponse, handleUnexpectedError } from "@/lib/api-re
 import { extractBearerToken, validateBearerToken } from "@/lib/auth";
 
 // Schema para ajuste de stock
+// SPRINT 12: Agregado branchId (requerido)
 const stockAdjustmentSchema = z.object({
   productId: z.string().uuid("El productId debe ser un UUID válido"),
+  branchId: z.string().uuid("El branchId debe ser un UUID válido"), // SPRINT 12: Requerido
   quantity: z.number().int("La cantidad debe ser un número entero"),
   type: z.enum(["adjustment", "purchase", "sale", "cancelation"]).default("adjustment"),
   referenceId: z.string().uuid("El referenceId debe ser un UUID válido").optional().nullable(),
@@ -80,11 +82,18 @@ export async function POST(req: Request) {
       );
     }
 
+    // SPRINT 12: Validar branchId
+    const branchId = body.branchId || parsed.data.branchId;
+    if (!branchId) {
+      return errorResponse("branchId es requerido (SPRINT 12)", 400);
+    }
+
     // Crear movimiento de stock
     const { error: movementError } = await supabase
       .from("stock_movements")
       .insert({
         tenant_id: finalTenantId,
+        branch_id: branchId, // SPRINT 12: Sucursal
         product_id: productId,
         type: type,
         quantity: quantity,
